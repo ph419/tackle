@@ -1,0 +1,29 @@
+{
+  "name": "tackle",
+  "version": "3.0.0",
+  "description": "Plugin-based AI Agent Harness framework for Claude Code",
+  "main": "plugins/runtime/harness-build.js",
+  "bin": {
+    "tackle": "bin/tackle.js"
+  },
+  "files": [
+    "bin/",
+    "plugins/"
+  ],
+  "scripts": {
+    "build": "node bin/tackle.js build",
+    "validate": "node bin/tackle.js validate"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "agent",
+    "harness",
+    "plugin",
+    "workflow"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

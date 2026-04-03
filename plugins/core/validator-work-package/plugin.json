@@ -1,0 +1,9 @@
+{
+  "name": "validator-work-package",
+  "version": "1.0.0",
+  "type": "validator",
+  "description": "工作包文档验证器 - 检测 WP 文档结构缺陷和依赖有效性",
+  "dependencies": [],
+  "provides": ["validator:work-package"],
+  "config": {}
+}

@@ -1,0 +1,9 @@
+{
+  "name": "provider-state-store",
+  "version": "1.0.0",
+  "type": "provider",
+  "description": "状态存储 Provider - 包装 StateStore 运行时模块，提供统一的状态和任务数据访问接口",
+  "dependencies": [],
+  "provides": ["provider:state-store"],
+  "config": {}
+}

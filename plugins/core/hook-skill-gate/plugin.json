@@ -1,0 +1,12 @@
+{
+  "name": "hook-skill-gate",
+  "version": "1.0.0",
+  "type": "hook",
+  "description": "统一技能门控 Hook - 合并 check-state + post-skill + skill-gate 三合一，动态查询 gated skills",
+  "dependencies": ["provider:state-store"],
+  "provides": ["hook:skill-gate"],
+  "config": {
+    "gatedSkills": [],
+    "blockedStates": ["waiting"]
+  }
+}

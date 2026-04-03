@@ -1,0 +1,13 @@
+{
+  "name": "skill-task-creator",
+  "version": "1.0.0",
+  "type": "skill",
+  "description": "任务创建 Skill - 创建工作包定义（仅定义不实现），包含复杂度评估、智能拆分模式和 Plan 模式流程",
+  "triggers": ["创建任务", "新建任务", "添加任务", "task-creator"],
+  "dependencies": ["provider:state-store"],
+  "provides": ["skill:task-creator"],
+  "metadata": {
+    "gatedByCode": true
+  },
+  "config": {}
+}

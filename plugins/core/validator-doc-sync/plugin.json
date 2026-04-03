@@ -1,0 +1,9 @@
+{
+  "name": "validator-doc-sync",
+  "version": "1.0.0",
+  "type": "validator",
+  "description": "文档同步验证器 - 检测 task.md 与 docs/wp/ 的不一致",
+  "dependencies": [],
+  "provides": ["validator:doc-sync"],
+  "config": {}
+}

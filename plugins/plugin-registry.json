@@ -1,0 +1,118 @@
+{
+  "version": "1.0.0",
+  "plugins": [
+    {
+      "name": "provider-state-store",
+      "source": "provider-state-store",
+      "enabled": true,
+      "config": {}
+    },
+    {
+      "name": "provider-role-registry",
+      "source": "provider-role-registry",
+      "enabled": true,
+      "config": {}
+    },
+    {
+      "name": "provider-memory-store",
+      "source": "provider-memory-store",
+      "enabled": true,
+      "config": {}
+    },
+    {
+      "name": "validator-doc-sync",
+      "source": "validator-doc-sync",
+      "enabled": true,
+      "config": {}
+    },
+    {
+      "name": "validator-work-package",
+      "source": "validator-work-package",
+      "enabled": true,
+      "config": {}
+    },
+    {
+      "name": "hook-skill-gate",
+      "source": "hook-skill-gate",
+      "enabled": true,
+      "config": {
+        "gatedSkills": [],
+        "blockedStates": [
+          "waiting"
+        ]
+      }
+    },
+    {
+      "name": "skill-task-creator",
+      "source": "skill-task-creator",
+      "enabled": true,
+      "config": {}
+    },
+    {
+      "name": "skill-batch-task-creator",
+      "source": "skill-batch-task-creator",
+      "enabled": true,
+      "config": {}
+    },
+    {
+      "name": "skill-split-work-package",
+      "source": "skill-split-work-package",
+      "enabled": true,
+      "config": {}
+    },
+    {
+      "name": "skill-progress-tracker",
+      "source": "skill-progress-tracker",
+      "enabled": true,
+      "config": {}
+    },
+    {
+      "name": "skill-team-cleanup",
+      "source": "skill-team-cleanup",
+      "enabled": true,
+      "config": {}
+    },
+    {
+      "name": "skill-human-checkpoint",
+      "source": "skill-human-checkpoint",
+      "enabled": true,
+      "config": {}
+    },
+    {
+      "name": "skill-role-manager",
+      "source": "skill-role-manager",
+      "enabled": true,
+      "config": {}
+    },
+    {
+      "name": "skill-checklist",
+      "source": "skill-checklist",
+      "enabled": true,
+      "config": {}
+    },
+    {
+      "name": "skill-completion-report",
+      "source": "skill-completion-report",
+      "enabled": true,
+      "config": {}
+    },
+    {
+      "name": "skill-experience-logger",
+      "source": "skill-experience-logger",
+      "enabled": true,
+      "config": {}
+    },
+    {
+      "name": "skill-agent-dispatcher",
+      "source": "skill-agent-dispatcher",
+      "enabled": true,
+      "config": {}
+    },
+    {
+      "name": "skill-workflow-orchestrator",
+      "source": "skill-workflow-orchestrator",
+      "enabled": true,
+      "config": {}
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "name": "skill-workflow-orchestrator",
+  "version": "1.0.0",
+  "type": "skill",
+  "description": "整体工作流编排 Skill - 协调需求规划、人介入审核、执行实现、检查交付、汇报询问五阶段完整开发流程",
+  "triggers": ["开始工作流", "执行完整流程", "workflow-orchestrator"],
+  "dependencies": ["provider:state-store"],
+  "provides": ["skill:workflow-orchestrator"],
+  "metadata": {
+    "gatedByCode": true
+  },
+  "config": {}
+}

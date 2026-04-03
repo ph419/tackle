@@ -1,0 +1,9 @@
+{
+  "name": "provider-memory-store",
+  "version": "1.0.0",
+  "type": "provider",
+  "description": "记忆存储 Provider - 包装 agents/memories/ 目录读写，提供角色记忆数据访问接口",
+  "dependencies": [],
+  "provides": ["provider:memory-store"],
+  "config": {}
+}

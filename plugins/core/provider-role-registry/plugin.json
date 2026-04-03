@@ -1,0 +1,9 @@
+{
+  "name": "provider-role-registry",
+  "version": "1.0.0",
+  "type": "provider",
+  "description": "角色注册表 Provider - 包装 role-registry.yaml 和角色文件读取，提供角色匹配与查询接口",
+  "dependencies": [],
+  "provides": ["provider:role-registry"],
+  "config": {}
+}
