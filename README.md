@@ -5,6 +5,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Version](https://img.shields.io/badge/version-0.0.1-blue.svg)](https://github.com/your-org/tackle)
 
+**[English](README.en.md)**
+
 ## 为什么选择 Tackle
 
 你告诉 AI 需求，Tackle 帮你管好整个流程：
@@ -134,18 +136,18 @@ npx tackle validate   # 验证插件完整性
 
 | 技能 | 触发方式 | 功能 |
 |------|----------|------|
-| task-creator | "创建任务"、"新建任务"、"添加任务" | 创建单个任务到任务列表 |
-| batch-task-creator | "批量创建任务"、"批量新建任务" | 批量创建多个任务 |
-| split-work-package | "拆分工作包"、"创建工作包" | 将需求拆分为可执行的工作包 |
-| progress-tracker | "记录进度"、"查看进度" | 追踪和汇报工作进度 |
-| team-cleanup | 清理孤立的 agent 团队 | 释放残留的团队资源 |
-| human-checkpoint | 到达关键决策点时触发 | 暂停并请求人工确认 |
-| role-manager | "查看角色"、"角色管理" | 管理项目角色定义 |
-| checklist | "运行检查"、"执行清单" | 执行检查清单 |
-| completion-report | 完成工作包时生成 | 生成完成报告 |
-| experience-logger | "总结经验"、"记录经验" | 记录项目经验教训 |
-| agent-dispatcher | "批量执行"、"并行执行" | 调度多个子代理并行工作 |
-| workflow-orchestrator | "开始工作流"、"执行完整流程" | 编排完整工作流 |
+| task-creator | "创建任务" / "create task" | 创建单个任务到任务列表 |
+| batch-task-creator | "批量创建任务" / "batch create tasks" | 批量创建多个任务 |
+| split-work-package | "拆分工作包" / "split work package" | 将需求拆分为可执行的工作包 |
+| progress-tracker | "记录进度" / "record progress" | 追踪和汇报工作进度 |
+| team-cleanup | "清理团队" / "cleanup team" | 释放残留的团队资源 |
+| human-checkpoint | "等待审核" / "wait for review" | 暂停并请求人工确认 |
+| role-manager | "查看角色" / "view roles" | 管理项目角色定义 |
+| checklist | "运行检查" / "run checklist" | 执行检查清单 |
+| completion-report | "完成报告" / "completion report" | 生成完成报告 |
+| experience-logger | "总结经验" / "log experience" | 记录项目经验教训 |
+| agent-dispatcher | "批量执行" / "dispatch agents" | 调度多个子代理并行工作 |
+| workflow-orchestrator | "开始工作流" / "start workflow" | 编排完整工作流 |
 
 ## 工作流概览
 

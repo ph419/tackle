@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "type": "skill",
   "description": "子代理批量调度 Skill - 基于 Agent Teams 机制的子代理批量任务调度，支持角色赋能、记忆注入、依赖分析和并行执行",
-  "triggers": ["批量执行", "并行执行", "调度子代理", "agent-dispatcher"],
+  "triggers": ["批量执行", "并行执行", "调度子代理", "agent-dispatcher", "batch execute", "parallel execute", "dispatch agents"],
   "dependencies": ["provider:role-registry", "provider:memory-store"],
   "provides": ["skill:agent-dispatcher"],
   "metadata": {

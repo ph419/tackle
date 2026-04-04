@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "type": "skill",
   "description": "工作包拆分 Skill - 将任务拆分为结构化工作包（仅定义不实现），支持子任务分解和依赖关系管理",
-  "triggers": ["拆分工作包", "创建工作包", "split-work-package"],
+  "triggers": ["拆分工作包", "创建工作包", "split-work-package", "split work package", "create work package"],
   "dependencies": ["provider:state-store", "provider:role-registry"],
   "provides": ["skill:split-work-package"],
   "metadata": {

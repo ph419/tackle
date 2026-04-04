@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "type": "skill",
   "description": "角色赋能系统管理技能 - 查看角色、匹配角色、角色信息查询，对接 provider-role-registry",
-  "triggers": ["查看角色", "列出角色", "匹配角色", "角色管理", "角色信息", "角色统计"],
+  "triggers": ["查看角色", "列出角色", "匹配角色", "角色管理", "角色信息", "角色统计", "view roles", "list roles", "role management"],
   "dependencies": ["provider-role-registry"],
   "provides": ["skill:role-manager"],
   "config": {}
