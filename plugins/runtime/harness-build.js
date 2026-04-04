@@ -55,6 +55,8 @@ function HarnessBuild(options) {
   this._validationWarnings = [];
   /** @type {object[]} build results */
   this._buildResults = [];
+  /** @type {object|null} cached harness config */
+  this._harnessConfig = null;
 }
 
 // ---------------------------------------------------------------------------
@@ -410,6 +412,9 @@ HarnessBuild.prototype._buildSkillPlugin = function _buildSkillPlugin(name, plug
       content = this._generateSkillFrontMatter(meta) + '\n' + content;
     }
 
+    // Inject context window configuration
+    content = this._injectContextConfig(content, name);
+
     fs.writeFileSync(skillMdDest, content, 'utf-8');
     files.push(skillMdDest);
     this._log('info', '  -> ' + skillMdDest);
@@ -708,6 +713,187 @@ HarnessBuild.prototype._log = function _log(level, message) {
   } else {
     console.log(prefix, message);
   }
+};
+
+/**
+ * Read and cache the harness config YAML file.
+ * @returns {object}
+ */
+HarnessBuild.prototype._readHarnessConfig = function _readHarnessConfig() {
+  if (this._harnessConfig !== null) {
+    return this._harnessConfig;
+  }
+
+  var configPath = path.join(this._rootDir, '.claude', 'config', 'harness-config.yaml');
+  try {
+    var content = fs.readFileSync(configPath, 'utf-8');
+    // Extract context_window section using simple regex
+    var result = {};
+    var inSection = false;
+    var sectionIndent = -1;
+    var lines = content.split('\n');
+
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+
+      // Detect context_window section start
+      if (/^context_window\s*:/.test(line.trim())) {
+        inSection = true;
+        sectionIndent = line.search(/\S/);
+        result = { _source: 'context_window' };
+        continue;
+      }
+
+      if (inSection) {
+        var trimmed = line.trim();
+
+        // Stop at next top-level section (--- separator or same-indent key)
+        if (trimmed === '---' || (line.search(/\S/) >= 0 && line.search(/\S/) <= sectionIndent && !/^[\s#]/.test(trimmed) && trimmed.indexOf('context_window') === -1 && /^[a-z]/.test(trimmed))) {
+          break;
+        }
+
+        // Skip empty lines and comments
+        if (!trimmed || trimmed.indexOf('#') === 0) {
+          continue;
+        }
+
+        // Parse simple key-value pairs (flat or one level nested)
+        var colonIdx = trimmed.indexOf(':');
+        if (colonIdx === -1) continue;
+
+        var key = trimmed.substring(0, colonIdx).trim();
+        var valuePart = trimmed.substring(colonIdx + 1).trim();
+
+        // Remove inline comments
+        var commentIdx = valuePart.indexOf(' #');
+        if (commentIdx >= 0) {
+          valuePart = valuePart.substring(0, commentIdx).trim();
+        }
+
+        // Skip nested keys like "thresholds:" (we handle them inline)
+        if (valuePart === '' || valuePart === null) {
+          // This is a nested section header, read its children
+          var nestedIndent = lines[i] ? lines[i].search(/\S/) : -1;
+          var nested = {};
+          var j = i + 1;
+          for (; j < lines.length; j++) {
+            var nLine = lines[j];
+            if (!nLine.trim() || nLine.trim().indexOf('#') === 0) continue;
+            var nIndent = nLine.search(/\S/);
+            if (nIndent <= nestedIndent) break;
+            var nTrimmed = nLine.trim();
+            // Handle list items "- key: value" or "- value"
+            if (nTrimmed.indexOf('- ') === 0) {
+              nTrimmed = nTrimmed.substring(2);
+            }
+            var nColonIdx = nTrimmed.indexOf(':');
+            if (nColonIdx >= 0) {
+              var nKey = nTrimmed.substring(0, nColonIdx).trim();
+              var nVal = nTrimmed.substring(nColonIdx + 1).trim();
+              var nCommentIdx = nVal.indexOf(' #');
+              if (nCommentIdx >= 0) nVal = nVal.substring(0, nCommentIdx).trim();
+              nested[nKey] = _parseValue(nVal);
+            }
+          }
+          result[key] = nested;
+          // Advance outer loop past the nested section
+          i = j - 1;
+          continue;
+        }
+
+        // Remove surrounding quotes
+        if ((valuePart.charAt(0) === '"' && valuePart.charAt(valuePart.length - 1) === '"') ||
+            (valuePart.charAt(0) === "'" && valuePart.charAt(valuePart.length - 1) === "'")) {
+          valuePart = valuePart.substring(1, valuePart.length - 1);
+        }
+
+        result[key] = _parseValue(valuePart);
+      }
+    }
+
+    this._harnessConfig = (inSection && result._source) ? result : {};
+    delete this._harnessConfig._source;
+  } catch (err) {
+    this._harnessConfig = {};
+  }
+
+  return this._harnessConfig;
+};
+
+/**
+ * Parse a YAML scalar value.
+ */
+function _parseValue(val) {
+  if (val === 'true') return true;
+  if (val === 'false') return false;
+  if (val === 'null' || val === '~') return null;
+  var num = Number(val);
+  if (!isNaN(num) && val !== '') return num;
+  return val;
+}
+
+/**
+ * Inject context window configuration into a skill.md file.
+ * Inserts a <!-- CONTEXT-CONFIG --> block after front matter.
+ *
+ * @param {string} content - the skill.md content
+ * @param {string} pluginName - the plugin name for per-plugin overrides
+ * @returns {string} content with injected config block
+ */
+HarnessBuild.prototype._injectContextConfig = function _injectContextConfig(content, pluginName) {
+  var config = this._readHarnessConfig();
+  if (!config || Object.keys(config).length === 0) {
+    return content; // No context_window config, skip injection
+  }
+
+  // Apply per-plugin override if exists
+  if (config.overrides && config.overrides[pluginName]) {
+    var override = config.overrides[pluginName];
+    for (var k in override) {
+      if (override.hasOwnProperty(k)) {
+        config[k] = override[k];
+      }
+    }
+  }
+  delete config.overrides;
+
+  // Build config block
+  var lines = ['\n<!-- CONTEXT-CONFIG'];
+  for (var key in config) {
+    if (!config.hasOwnProperty(key)) continue;
+    var val = config[key];
+    if (typeof val === 'object' && val !== null) {
+      // Flatten nested objects (e.g., thresholds)
+      var parts = [];
+      for (var sk in val) {
+        if (val.hasOwnProperty(sk)) {
+          parts.push(sk + '=' + val[sk]);
+        }
+      }
+      lines.push(key + ': ' + parts.join(', '));
+    } else {
+      lines.push(key + ': ' + val);
+    }
+  }
+  lines.push('CONTEXT-CONFIG -->\n');
+
+  var configBlock = lines.join('\n');
+
+  // Find insertion point: after front matter closing ---
+  var fmCloseIdx = content.indexOf('---', 1); // skip first ---
+  if (fmCloseIdx === -1) {
+    // No front matter, prepend
+    return configBlock + content;
+  }
+
+  var afterFm = content.indexOf('\n', fmCloseIdx + 3);
+  if (afterFm === -1) {
+    afterFm = content.length;
+  } else {
+    afterFm += 1; // skip the newline itself
+  }
+
+  return content.substring(0, afterFm) + configBlock + content.substring(afterFm);
 };
 
 // ---------------------------------------------------------------------------

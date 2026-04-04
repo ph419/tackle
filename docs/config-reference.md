@@ -80,6 +80,49 @@ middleware:
 | memory | object | 否 | 记忆系统配置 |
 | mcp | object | 否 | MCP 协议配置 |
 | middleware | object | 否 | 中间件配置 |
+| context_window | object | 否 | 上下文窗口管理配置 |
+
+---
+
+## context_window 配置节
+
+上下文窗口管理配置，控制任务创建技能在分析大文件时的分块读取行为。
+
+### 配置结构
+
+```yaml
+context_window:
+  max_tokens: 200000
+  safety_margin: 40000
+  chunk_lines: 500
+  strategy: "auto"
+  thresholds:
+    small: 200
+    medium: 800
+    large: 2000
+```
+
+### 配置项说明
+
+| 配置项 | 类型 | 默认值 | 描述 |
+|--------|------|--------|------|
+| max_tokens | number | 200000 | 模型上下文窗口大小（token 数近似值） |
+| safety_margin | number | 40000 | 为指令和输出预留的 token 数，防止上下文溢出 |
+| chunk_lines | number | 500 | 分块读取时每次 Read 调用的最大行数 |
+| strategy | string | "auto" | 溢出处理策略。`auto` 根据文件类型和大小自动选择 |
+| thresholds | object | - | 文件大小阈值（行数），决定读取策略 |
+| thresholds.small | number | 200 | 小文件阈值。≤ 此值直接读取 |
+| thresholds.medium | number | 800 | 中文件阈值。此值内分块读取 |
+| thresholds.large | number | 2000 | 大文件阈值。超过此值优先 Grep 扫描 |
+
+### 工作原理
+
+构建时，`harness-build.js` 读取此配置并注入到每个 skill.md 的 `<!-- CONTEXT-CONFIG -->` 注释块中。技能在深度模式下执行时根据这些参数决定读取策略：
+
+- **小文件** (≤ 200行): 直接用 Read 工具读取
+- **中文件** (200-800行): 用 Read(offset, limit) 分块读取
+- **大文件** (> 800行): 先 Grep 扫描定位，再定向读取
+- **多文件超预算**: 按优先级排序，高优读全文，低优用 Grep
 
 ---
 
