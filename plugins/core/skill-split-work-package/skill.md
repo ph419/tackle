@@ -8,9 +8,8 @@ If you were dispatched as a subagent to execute a specific task, skip this skill
 ║                                                                              ║
 ║  Plan 确认后，自动执行以下步骤：                                              ║
 ║  Step 7:  写入 docs/wp/WP-XXX.md                                            ║
-║  Step 8:  更新 docs/core/12_工作包清单.md                                    ║
-║  Step 9:  更新 task.md                                                       ║
-║  Step 10: 输出简洁报告 → 🛑 停止                                             ║
+║  Step 8:  更新 task.md                                                       ║
+║  Step 9:  输出简洁报告 → 🛑 停止                                             ║
 ║                                                                              ║
 ║  ⚠️ 这是自动流程，不需要用户再次确认                                         ║
 ║  ⚠️ bypassPermission 不影响此流程                                            ║
@@ -24,9 +23,8 @@ If you were dispatched as a subagent to execute a specific task, skip this skill
 ║  Plan 确认后，你必须**立即**执行以下步骤：                                    ║
 ║                                                                              ║
 ║  Step 7:  写入 docs/wp/WP-XXX.md（完整工作包文档）                           ║
-║  Step 8:  更新 docs/core/12_工作包清单.md（追加摘要）                        ║
-║  Step 9:  更新 task.md（追加概览表行）                                       ║
-║  Step 10: 输出简洁报告 → 🛑 停止                                             ║
+║  Step 8:  更新 task.md（追加概览表行）                                       ║
+║  Step 9:  输出简洁报告 → 🛑 停止                                             ║
 ║                                                                              ║
 ║  ⚠️ 这是自动流程，不需要用户再次确认                                         ║
 ║  ⚠️ bypassPermission 不影响此流程                                            ║
@@ -182,7 +180,6 @@ Plan 阶段可以自由进行：
 **允许的操作**:
 - ✅ 读取项目文件（分析依赖）
 - ✅ 写入 `docs/wp/WP-XXX.md`
-- ✅ 更新 `docs/core/12_工作包清单.md`
 - ✅ 更新 `task.md`
 
 **禁止的操作**:
@@ -229,7 +226,6 @@ digraph split_wp_v4 {
         color=blue;
 
         "写入 WP-XXX.md" [shape=box];
-        "更新 12_工作包清单.md" [shape=box];
         "更新 task.md" [shape=box];
         "输出完成报告" [shape=box];
         "🛑 停止" [shape=box, style=filled, fillcolor=red];
@@ -245,8 +241,7 @@ digraph split_wp_v4 {
     "用户审核 Plan" -> "写入 WP-XXX.md" [label="确认"];
     "用户审核 Plan" -> "修改计划" [label="修改", style=dashed];
 
-    "写入 WP-XXX.md" -> "更新 12_工作包清单.md";
-    "更新 12_工作包清单.md" -> "更新 task.md";
+    "写入 WP-XXX.md" -> "更新 task.md";
     "更新 task.md" -> "输出完成报告";
     "输出完成报告" -> "🛑 停止";
 }
@@ -286,9 +281,8 @@ digraph split_wp_v4 {
 ║  Step 2:  分析依赖关系                                                       ║
 ║  Step 3:  生成工作包结构                                                     ║
 ║  Step 4:  写入 docs/wp/WP-XXX.md                                            ║
-║  Step 5:  更新 docs/core/12_工作包清单.md                                    ║
-║  Step 6:  更新 task.md                                                       ║
-║  Step 7:  输出简洁报告 → 🛑 停止                                             ║
+║  Step 5:  更新 task.md                                                       ║
+║  Step 6:  输出简洁报告 → 🛑 停止                                             ║
 ║                                                                              ║
 ║  ⚠️ 这是自动流程，不需要用户再次确认                                         ║
 ║  ⚠️ bypassPermission 不影响此流程                                            ║
@@ -301,9 +295,8 @@ digraph split_wp_v4 {
 2. **分析范围** - 理解技术要求、依赖关系、涉及文件
 3. **生成工作包** - 创建唯一 ID、预估AI时间、测试用例
 4. **写入工作包文档** - 创建 `docs/wp/WP-XXX.md`
-5. **更新清单** - 追加到 `docs/core/12_工作包清单.md`
-6. **同步 task.md** - 在工作包概览表添加新行
-7. **输出简洁报告** - 向用户报告新增的 WP ID，然后 **🛑 停止**
+5. **同步 task.md** - 在工作包概览表添加新行
+6. **输出简洁报告** - 向用户报告新增的 WP ID，然后 **🛑 停止**
 
 ---
 
@@ -320,7 +313,6 @@ digraph split_wp_v4 {
 
 📁 **已更新文档**:
 - docs/wp/WP-XXX.md
-- docs/core/12_工作包清单.md
 - task.md
 
 🛑 **任务创建完成，等待您的下一步指示**
@@ -340,7 +332,6 @@ digraph split_wp_v4 {
 ║                                                                  ║
 ║  Plan 确认后：                                                    ║
 ║  ✅ 自动写入 docs/wp/WP-XXX.md                                   ║
-║  ✅ 自动更新 docs/core/12_工作包清单.md                           ║
 ║  ✅ 自动更新 task.md                                             ║
 ║  ✅ 输出简洁报告                                                  ║
 ║  ✅ 🛑 停止等待用户下一步指示                                     ║
@@ -406,7 +397,6 @@ scripts/path/to/file.gd
 | 文件类型 | 允许在本 Skill 中修改 |
 |----------|----------------------|
 | `docs/wp/WP-XXX.md` | ✅ 允许 |
-| `docs/core/12_工作包清单.md` | ✅ 允许 |
 | `task.md` | ✅ 允许 |
 | `scripts/**/*.gd` | ❌ 禁止 |
 | `scenes/**/*.tscn` | ❌ 禁止 |

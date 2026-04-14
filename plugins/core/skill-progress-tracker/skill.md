@@ -34,10 +34,6 @@ description: Use when user says "记录进度", "保存进度", "读取进度", 
 ```dot
 digraph read_progress {
     "用户请求读取进度" [shape=box];
-    "读取 PROGRESS.md" [shape=diamond];
-    "文档是否过大?" [shape=diamond];
-    "分段读取" [shape=box];
-    "完整读取" [shape=box];
     "读取 task.md" [shape=diamond];
     "文档是否过大?" [shape=diamond];
     "分段读取" [shape=box];
@@ -45,12 +41,7 @@ digraph read_progress {
     "汇报最近工作" [shape=box];
     "询问是否继续" [shape=box];
 
-    "用户请求读取进度" -> "读取 PROGRESS.md";
-    "读取 PROGRESS.md" -> "文档是否过大?";
-    "文档是否过大?" -> "分段读取" [label="是(>2000行)"];
-    "文档是否过大?" -> "完整读取" [label="否"];
-    "分段读取" -> "读取 task.md";
-    "完整读取" -> "读取 task.md";
+    "用户请求读取进度" -> "读取 task.md";
     "读取 task.md" -> "文档是否过大?";
     "文档是否过大?" -> "分段读取" [label="是(>2000行)"];
     "文档是否过大?" -> "完整读取" [label="否"];
@@ -66,7 +57,6 @@ digraph read_progress {
 
 | 文件 | 分段策略 | 优先读取 |
 |------|----------|----------|
-| `PROGRESS.md` | 读取最近 2000 行（从尾部开始） | 最新进度记录 |
 | `task.md` | 先读前 500 行概览，再按需读取 | 工作包概览表 |
 | `docs/wp/WP-XXX.md` | 按需读取具体工作包详情 | 单个工作包信息 |
 
@@ -187,7 +177,6 @@ Read(file_path="...", offset=1001, limit=1000) # 第2批
 
 | 文件 | 用途 | 状态 |
 |------|------|------|
-| `PROGRESS.md` | 详细进度记录（日志型） | ✅ 主要 |
 | `task.md` | 任务清单（主索引） | ✅ 主要 |
 | `docs/wp/WP-XXX.md` | 工作包详情（可选更新） | ✅ 活跃 |
 | `docs/archive/*.md` | 历史归档 | 📦 归档 |
@@ -200,5 +189,5 @@ Read(file_path="...", offset=1001, limit=1000) # 第2批
 ## Notes
 
 - 记录足够详细以便下次会话快速恢复上下文
-- 优先更新 task.md，不再使用 PROGRESS.md（已废弃）
+- 优先更新 task.md 作为主索引
 - 定期检查归档触发条件
