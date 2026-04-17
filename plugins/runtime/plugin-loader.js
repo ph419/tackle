@@ -14,7 +14,7 @@
 
 var fs = require('fs');
 var path = require('path');
-var { PluginState } = require('../contracts/plugin-interface');
+var { PluginState, PluginType, SkillPlugin, HookPlugin, ValidatorPlugin, ProviderPlugin } = require('../contracts/plugin-interface');
 
 class PluginLoader {
   /**
@@ -83,11 +83,12 @@ class PluginLoader {
 
       try {
         await this._loadPlugin(name, config);
+        await this.activate(name);
         loaded.push(name);
         if (this._eventBus) {
           this._eventBus.emit('plugin:loaded', { pluginName: name });
         }
-        this._log('info', 'Plugin "' + name + '" loaded successfully');
+        this._log('info', 'Plugin "' + name + '" loaded and activated successfully');
       } catch (err) {
         this._log('error', 'Failed to load plugin "' + name + '": ' + err.message);
         // Non-critical plugins don't block others
@@ -100,14 +101,28 @@ class PluginLoader {
 
   /**
    * Activate a single loaded plugin.
+   * Creates PluginContext and injects EventBus, StateStore, ConfigManager, Logger.
    * @param {string} name - plugin name
-   * @param {object} context - PluginContext to inject
    */
-  async activate(name, context) {
+  async activate(name) {
     var plugin = this.loadedPlugins.get(name);
     if (!plugin) {
       throw new Error('Plugin "' + name + '" is not loaded');
     }
+
+    var PluginContext = require('../contracts/plugin-interface').PluginContext;
+
+    // Create runtime object with all services
+    var runtime = {
+      eventBus: this._eventBus,
+      stateStore: this._stateStore,
+      configManager: this._configManager,
+      logger: this._logger ? this._logger.createChild(name) : null,
+      getProvider: this._getProvider.bind(this),
+      loadedPlugins: this.loadedPlugins,
+    };
+
+    var context = new PluginContext(name, runtime);
 
     if (typeof plugin.onActivate === 'function') {
       await plugin.onActivate(context);
@@ -302,26 +317,109 @@ class PluginLoader {
   }
 
   /**
-   * Load a single plugin.
-   * For now, records the plugin in the loaded map.
-   * Actual JS module loading will be added when plugins have executable code.
+   * Load a single plugin by type.
+   * - Skill: only metadata, no JS module
+   * - Hook/Validator/Provider: require() index.js and instantiate
    *
    * @param {string} name
    * @param {object} config
    */
   async _loadPlugin(name, config) {
-    // Store the plugin with metadata
-    // In future iterations, this will require() the actual plugin module
-    var pluginEntry = {
-      name: name,
-      config: config || {},
-      state: PluginState.LOADED,
-      // Placeholder - real plugins will have onActivate/onDeactivate
-      onActivate: function () {},
-      onDeactivate: function () {},
-    };
+    var source = config && config.source ? config.source : name;
+    // Resolve plugin directory using absolute path
+    var registryDir = path.resolve(path.dirname(this._registryPath));
+    var pluginDir = path.join(registryDir, 'core', source);
+    var pluginJsonPath = path.join(pluginDir, 'plugin.json');
 
-    this.loadedPlugins.set(name, pluginEntry);
+    // Read plugin.json to determine type
+    var pluginJson = this._readPluginJson(pluginJsonPath);
+    var type = pluginJson.type || PluginType.SKILL;
+
+    var pluginInstance;
+
+    if (type === PluginType.SKILL) {
+      // Skill plugins have no JS module - store metadata only
+      pluginInstance = new SkillPlugin();
+      pluginInstance.name = name;
+      pluginInstance.version = pluginJson.version || '0.0.0';
+      pluginInstance.description = pluginJson.description || '';
+      pluginInstance.triggers = pluginJson.triggers || [];
+      pluginInstance.metadata = pluginJson.metadata || {};
+    } else {
+      // Hook/Validator/Provider: require and instantiate using absolute path
+      var indexJsPath = path.resolve(pluginDir, 'index.js');
+      var PluginClass = require(indexJsPath);
+
+      // Verify the export is a constructor function
+      if (typeof PluginClass !== 'function') {
+        throw new Error('Plugin "' + name + '" does not export a constructor function');
+      }
+
+      if (type === PluginType.HOOK) {
+        pluginInstance = new PluginClass();
+      } else if (type === PluginType.VALIDATOR) {
+        pluginInstance = new PluginClass();
+      } else if (type === PluginType.PROVIDER) {
+        pluginInstance = new PluginClass();
+      } else {
+        throw new Error('Unknown plugin type: ' + type);
+      }
+    }
+
+    // Set common properties
+    pluginInstance.config = config || {};
+    pluginInstance.state = PluginState.LOADED;
+
+    this.loadedPlugins.set(name, pluginInstance);
+  }
+
+  /**
+   * Read and parse plugin.json.
+   * @param {string} jsonPath
+   * @returns {object} parsed JSON or empty object
+   */
+  _readPluginJson(jsonPath) {
+    try {
+      var content = fs.readFileSync(jsonPath, 'utf-8');
+      return JSON.parse(content);
+    } catch (err) {
+      this._log('warn', 'Could not read plugin.json at ' + jsonPath + ': ' + err.message);
+      return {};
+    }
+  }
+
+  /**
+   * Get a loaded Provider plugin by name and call its factory() method.
+   * Used by PluginContext.getProvider().
+   * @param {string} name - provider name
+   * @returns {Promise<object>} Provider instance from factory() or undefined
+   */
+  async _getProvider(name) {
+    var plugin = this.loadedPlugins.get(name);
+    if (!plugin) {
+      return undefined;
+    }
+    if (plugin.type !== PluginType.PROVIDER) {
+      return undefined;
+    }
+    if (plugin.state !== PluginState.ACTIVATED) {
+      this._log('warn', 'Provider "' + name + '" is not activated yet');
+      return undefined;
+    }
+    if (typeof plugin.factory === 'function') {
+      var PluginContext = require('../contracts/plugin-interface').PluginContext;
+      var runtime = {
+        eventBus: this._eventBus,
+        stateStore: this._stateStore,
+        configManager: this._configManager,
+        logger: this._logger ? this._logger.createChild(name) : null,
+        getProvider: this._getProvider.bind(this),
+        loadedPlugins: this.loadedPlugins,
+      };
+      var context = new PluginContext(name, runtime);
+      return await plugin.factory(context);
+    }
+    return plugin;
   }
 
   /**

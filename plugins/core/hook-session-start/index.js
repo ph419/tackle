@@ -134,20 +134,43 @@ function escapeForJson(s) {
 
 // --- Main ---
 (function main() {
-  var root = resolveProjectRoot();
-  var context = buildContext(root);
+  // Only run main if executed directly (not required as a module)
+  if (require.main === module) {
+    var root = resolveProjectRoot();
+    var context = buildContext(root);
 
-  if (!context) {
-    // No plan-mode skills found, output empty context
-    process.stdout.write('{}\n');
+    if (!context) {
+      // No plan-mode skills found, output empty context
+      process.stdout.write('{}\n');
+      process.exit(0);
+    }
+
+    var escaped = escapeForJson(context);
+
+    // Claude Code SessionStart hook output format
+    var output = '{\n  "hookSpecificOutput": {\n    "hookEventName": "SessionStart",\n    "additionalContext": "' + escaped + '"\n  }\n}\n';
+
+    process.stdout.write(output);
     process.exit(0);
   }
-
-  var escaped = escapeForJson(context);
-
-  // Claude Code SessionStart hook output format
-  var output = '{\n  "hookSpecificOutput": {\n    "hookEventName": "SessionStart",\n    "additionalContext": "' + escaped + '"\n  }\n}\n';
-
-  process.stdout.write(output);
-  process.exit(0);
 })();
+
+// Export a no-op class for PluginLoader compatibility
+class SessionStartHook {
+  constructor() {
+    this.name = 'hook-session-start';
+    this.version = '1.0.0';
+    this.description = 'SessionStart hook for plan-mode rules';
+    this.type = 'hook';
+  }
+
+  async onActivate(context) {
+    // No-op - this hook is CLI-only
+  }
+
+  async handle(context) {
+    return { allowed: true };
+  }
+}
+
+module.exports = SessionStartHook;
