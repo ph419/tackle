@@ -147,6 +147,7 @@ function cmdBuild() {
     }
     builder.updateSettings(targetRoot, packageRoot);
     builder.injectClaudeMdRules(targetRoot);
+    _cleanStaleOutput(builder);
   }
 
   // Apply colors to summary output
@@ -165,6 +166,67 @@ function cmdBuild() {
   }
 
   process.exit(result.success ? 0 : 1);
+}
+
+/**
+ * Remove stale output directories from disabled or removed plugins.
+ */
+function _cleanStaleOutput(builder) {
+  var registry = builder._readRegistry();
+  var plugins = registry.plugins || [];
+  var activeNames = {};
+  for (var i = 0; i < plugins.length; i++) {
+    if (plugins[i].enabled !== false) {
+      var pDir = path.join(packageRoot, 'plugins', 'core', plugins[i].source || plugins[i].name);
+      var metaPath = path.join(pDir, 'plugin.json');
+      if (fs.existsSync(metaPath)) {
+        try {
+          var meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+          activeNames[meta.name || plugins[i].name] = true;
+        } catch (e) {}
+      }
+    }
+  }
+
+  var outputDirs = [
+    { dir: path.join(targetRoot, '.claude', 'skills'), label: 'skill' },
+    { dir: path.join(targetRoot, '.claude', 'hooks'), label: 'hook' },
+  ];
+
+  for (var d = 0; d < outputDirs.length; d++) {
+    var dir = outputDirs[d].dir;
+    if (!fs.existsSync(dir)) continue;
+    var entries;
+    try { entries = fs.readdirSync(dir); } catch (e) { continue; }
+    for (var e = 0; e < entries.length; e++) {
+      if (!activeNames[entries[e]]) {
+        var stalePath = path.join(dir, entries[e]);
+        try {
+          _rmRecursive(stalePath);
+          console.log(colorize('[tackle-harness] Cleaned stale output: ' + entries[e], 'yellow'));
+        } catch (err) {
+          console.log(colorize('[tackle-harness] Warning: could not remove ' + entries[e], 'yellow'));
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Recursively remove a directory.
+ */
+function _rmRecursive(dirPath) {
+  if (!fs.existsSync(dirPath)) return;
+  var entries = fs.readdirSync(dirPath);
+  for (var i = 0; i < entries.length; i++) {
+    var entryPath = path.join(dirPath, entries[i]);
+    if (fs.statSync(entryPath).isDirectory()) {
+      _rmRecursive(entryPath);
+    } else {
+      fs.unlinkSync(entryPath);
+    }
+  }
+  fs.rmdirSync(dirPath);
 }
 
 function cmdValidate() {
@@ -241,7 +303,6 @@ function cmdHelp() {
   console.log('');
   console.log('After running ' + colorize('tackle-harness build', 'green') + ', skills are available in .claude/skills/');
   console.log('and hooks are registered in .claude/settings.json');
-  process.exit(0);
 }
 
 function cmdValidateConfig() {
@@ -338,7 +399,7 @@ function cmdStatus() {
   console.log(colorize('Plugin Statistics:', 'cyan'));
   console.log('  Total plugins:   ' + stats.total);
   console.log('  Enabled plugins: ' + colorize(stats.enabled, 'green'));
-  console.log('  Disabled plugins:' + (stats.disabled > 0 ? colorize(stats.disabled, 'yellow') : ' 0'));
+  console.log('  Disabled plugins: ' + (stats.disabled > 0 ? colorize(String(stats.disabled), 'yellow') : '0'));
   console.log('');
   console.log('  By type:');
   console.log('    Skills:     ' + stats.skill);
@@ -347,11 +408,29 @@ function cmdStatus() {
   console.log('    Providers:  ' + stats.provider);
   console.log('');
 
-  // Show last build time if available
+  // Show last build time if available (scan files inside skill subdirs)
   if (fs.existsSync(skillsDir)) {
-    var statsDir = fs.statSync(skillsDir);
-    var mtime = statsDir.mtime;
-    console.log('Last build: ' + mtime.toLocaleString());
+    var latestTime = null;
+    try {
+      var entries = fs.readdirSync(skillsDir);
+      for (var ei = 0; ei < entries.length; ei++) {
+        var skillEntryDir = path.join(skillsDir, entries[ei]);
+        try {
+          var skillFiles = fs.readdirSync(skillEntryDir);
+          for (var si = 0; si < skillFiles.length; si++) {
+            try {
+              var fileStat = fs.statSync(path.join(skillEntryDir, skillFiles[si]));
+              if (!latestTime || fileStat.mtime > latestTime) {
+                latestTime = fileStat.mtime;
+              }
+            } catch (ignore) {}
+          }
+        } catch (ignore) {}
+      }
+    } catch (ignore) {}
+    if (latestTime) {
+      console.log('Last build: ' + latestTime.toLocaleString());
+    }
   }
 
   process.exit(0);
@@ -498,7 +577,7 @@ function cmdList() {
       for (var k = 0; k < typePlugins.length; k++) {
         var plugin = typePlugins[k];
         var namePadding = ' '.repeat(maxNameLen - plugin.name.length + 2);
-        console.log('  ' + plugin.name + namePadding + '[' + plugin.status + ']  v' + plugin.version);
+        console.log('  ' + plugin.name + namePadding + '[' + plugin.status + ']  ' + (plugin.version !== '-' ? 'v' : '') + plugin.version);
       }
       console.log('');
     }
@@ -560,7 +639,12 @@ switch (command) {
     cmdVersion();
     break;
   case 'help':
-  default:
     cmdHelp();
+    process.exit(0);
     break;
+  default:
+    console.error(colorize('Error: Unknown command "' + command + '"', 'red'));
+    console.error('');
+    cmdHelp();
+    process.exit(1);
 }

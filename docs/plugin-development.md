@@ -48,6 +48,7 @@
 | `version` | string | ✅ | 语义化版本号 |
 | `type` | string | ✅ | 插件类型：`skill`、`hook`、`validator`、`provider` |
 | `description` | string | ✅ | 插件功能描述 |
+| `triggers` | string[] | ❌ | 触发关键词列表（主要用于 Skill 插件） |
 | `dependencies` | string[] | ❌ | 依赖的 provider 或插件 |
 | `provides` | string[] | ❌ | 此插件提供的能力标识 |
 | `config` | object | ❌ | 默认配置值 |
@@ -432,7 +433,7 @@ plugins/core/my-skill/
 
 ### 2. 更新注册表
 
-编辑 `plugins/plugin-registry.json`，添加新插件条目：
+编辑 `plugins/plugin-registry.json`，在 `plugins` 数组中追加新插件条目（保留已有插件）：
 
 ```json
 {

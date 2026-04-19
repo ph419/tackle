@@ -103,7 +103,7 @@ claude
 或者使用其他触发词：
 
 ```
-/ task-creator
+/skill-task-creator
 ```
 
 ### 3. 观察 AI 响应
@@ -128,7 +128,7 @@ Claude Code 将：
 或使用完整的技能：
 
 ```
-/ agent-dispatcher
+/skill-agent-dispatcher
 ```
 
 ## 验证安装
@@ -142,8 +142,12 @@ npx tackle-harness validate
 应该看到类似输出：
 
 ```
-[tackle-harness] Validating plugins...
-[tackle-harness] All plugins valid.
+=== Validation Report ===
+Plugins checked: 19
+Errors: 0
+Warnings: 0
+
+Validation PASSED
 ```
 
 ### 检查构建输出
@@ -164,7 +168,8 @@ ls .claude/skills/
 ls .claude/hooks/
 
 # 应该看到：
-# index.js
+# hook-skill-gate
+# hook-session-start
 ```
 
 ### 检查配置
@@ -182,7 +187,12 @@ cat .claude/settings.json
 | `tackle-harness` | 构建所有插件（默认命令） |
 | `tackle-harness build` | 同上，构建所有插件 |
 | `tackle-harness validate` | 验证插件格式 |
+| `tackle-harness validate-config` | 验证 harness-config.yaml |
 | `tackle-harness init` | 首次配置（build + 生成配置） |
+| `tackle-harness status` | 显示构建状态和插件统计 |
+| `tackle-harness config` | 显示/验证当前配置 |
+| `tackle-harness list` | 列出所有已注册插件 |
+| `tackle-harness version` | 显示版本信息 |
 | `tackle-harness --root <path>` | 指定目标项目路径 |
 
 ### 示例
