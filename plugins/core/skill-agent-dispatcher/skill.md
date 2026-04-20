@@ -255,6 +255,15 @@ for task in tasks:
 
         # 记录映射关系
         teamee_map[task.id] = teamee_name
+
+# ---- 1:1 映射验证 ----
+all_tasks_verify = TaskList()
+unblocked_verify = [t for t in all_tasks_verify if t.status == "pending" and is_unblocked(t)]
+if len(teamee_map) != len(unblocked_verify):
+    print(f"⚠️ 验证失败: 有 {len(unblocked_verify)} 个已解除阻塞的 WP 但只创建了 {len(teamee_map)} 个 Teamee")
+    print("❌ 这可能意味着某些 WP 被错误合并。请检查以上步骤是否严格遵循 1:1 映射规则。")
+else:
+    print(f"✅ 1:1 映射验证通过: {len(teamee_map)} 个 Teamee 对应 {len(unblocked_verify)} 个已解除阻塞的 WP")
 ```
 
 **为什么不能用 Explore agent**:
@@ -715,6 +724,50 @@ Read("plugins/core/skill-agent-dispatcher/roles-reference.md")
 请手动解除依赖关系后重试。
 ```
 
+### 依赖分析输出规范
+
+**⚠️ 依赖分析的输出必须且只能包含以下信息：**
+
+1. 每个 WP 的 `blockedBy` 依赖关系（来自 WP 文档声明）
+2. 拓扑排序后的执行批次（哪些可以并行、哪些必须串行）
+3. 循环依赖检测结果
+
+**禁止输出的内容：**
+- ❌ 各 WP 修改的文件列表或文件重叠分析
+- ❌ "WP-XXX~YYY 修改同一文件" 之类的陈述
+- ❌ 基于文件重叠的调度建议
+
+**原因**: 文件冲突评估不属于 dispatcher 职责。如果 WP 之间需要串行，应在 WP 创建阶段通过 blockedBy 声明。
+
+---
+
+## File Conflict Policy
+
+### 核心规则：1:1 映射不受文件冲突影响
+
+| 规则 | 说明 |
+|------|------|
+| **绝对禁止** | 不得因多个 WP 修改同一文件而合并为单 agent |
+| **绝对禁止** | 不得自行添加基于文件重叠的 blockedBy 依赖 |
+| **唯一依据** | blockedBy 只来自 WP 文档中声明的依赖关系 |
+
+### 正确处理方式
+
+场景：WP-023, WP-024, WP-025 都修改 file.java，且都依赖 WP-022
+
+- ❌ 错误：将 WP-023~025 合并到一个 agent 顺序执行
+- ✅ 正确：WP 创建阶段没有互相依赖 → 并行执行，每 WP 一个 Teamee
+- ✅ 正确：如果需要串行 → 回到 WP 创建阶段添加 blockedBy（WP-024 blockedBy WP-023）
+
+### Forbidden Thoughts（文件冲突相关）
+
+| Thought | Reality |
+|---------|---------|
+| "它们修改同一文件，应该合并" | ❌ 1:1 规则是绝对的，禁止合并 |
+| "并行编辑同一文件会冲突" | ❌ 这不是 dispatcher 应该关心的问题 |
+| "我应该为它们添加隐式依赖" | ❌ blockedBy 只来自 WP 文档声明 |
+| "出于安全考虑，应该串行执行" | ❌ 安全性由 WP 设计者负责，不由 dispatcher 覆盖 |
+
 ---
 
 ## Execution Report
@@ -811,3 +864,4 @@ docs/reports/{YYYY-MM-DD}_{工作包列表}_execution_report.md
 7. **经验沉淀形成闭环** - 每次执行都让角色更聪明
 8. **🔴 TeamDelete 是强制的** - 无论成功/失败/超时，都必须执行清理！
 9. **🔴 监控循环不可跳过** - Lead 必须进入 Step 6.5 监控循环，负责动态创建和即时销毁
+10. **🔴 文件冲突不得触发合并** - 即使多个 WP 修改同一文件，也必须每 WP 一个 Teamee。blockedBy 依赖只以 WP 文档声明为准，禁止自行添加隐式依赖
