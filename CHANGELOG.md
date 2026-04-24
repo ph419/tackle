@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.13] - 2026-04-24
+
+### Fixed
+
+- `package.json` 的 `files` 字段缺少 `templates/`，导致 npm 安装后 `init` 命令找不到 `harness-config.yaml` 模板文件
+
 ## [0.0.12] - 2026-04-22
 
 ### Added
@@ -112,6 +118,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 插件注册表 (`plugin-registry.json`)
 - 运行时层：harness-build、plugin-loader、event-bus、state-store、config-manager、logger
 
+[0.0.13]: https://github.com/ph419/tackle/compare/v0.0.12...v0.0.13
 [0.0.12]: https://github.com/ph419/tackle/compare/v0.0.11...v0.0.12
 [0.0.11]: https://github.com/ph419/tackle/compare/v0.0.10...v0.0.11
 [0.0.10]: https://github.com/ph419/tackle/compare/v0.0.9...v0.0.10
