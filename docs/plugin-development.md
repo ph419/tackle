@@ -2,6 +2,8 @@
 
 本指南介绍如何为 Tackle Harness 开发自定义插件。Tackle Harness 是一个基于插件的 AI Agent 工作流框架，支持四种插件类型：Skill、Hook、Validator 和 Provider。
 
+> **当前版本 (v0.0.14) 插件统计**：13 个 Skill、2 个 Hook、2 个 Validator、4 个 Provider，共 21 个插件。详见 `plugins/plugin-registry.json`。
+
 ## 目录
 
 - [插件类型概述](#插件类型概述)
@@ -33,10 +35,15 @@
   "version": "1.0.0",
   "type": "skill|hook|validator|provider",
   "description": "插件描述",
+  "triggers": ["关键词1", "关键词2"],
   "dependencies": ["provider:state-store"],
   "provides": ["skill:plugin-name"],
   "config": {},
-  "metadata": {}
+  "metadata": {
+    "gatedByCode": false,
+    "gatedByHuman": false,
+    "requiresPlanMode": false
+  }
 }
 ```
 
@@ -49,10 +56,19 @@
 | `type` | string | ✅ | 插件类型：`skill`、`hook`、`validator`、`provider` |
 | `description` | string | ✅ | 插件功能描述 |
 | `triggers` | string[] | ❌ | 触发关键词列表（主要用于 Skill 插件） |
-| `dependencies` | string[] | ❌ | 依赖的 provider 或插件 |
-| `provides` | string[] | ❌ | 此插件提供的能力标识 |
+| `dependencies` | string[] | ❌ | 依赖的 provider（如 `provider:state-store`） |
+| `provides` | string[] | ❌ | 此插件提供的能力标识（如 `skill:plugin-name`） |
 | `config` | object | ❌ | 默认配置值 |
-| `metadata` | object | ❌ | 额外元数据（如触发器、目标等） |
+| `metadata` | object | ❌ | 额外元数据（见下方说明） |
+
+### metadata 常用字段
+
+| 字段 | 类型 | 适用类型 | 说明 |
+|------|------|----------|------|
+| `gatedByCode` | boolean | Skill | 是否受代码门控（需先执行特定技能解锁） |
+| `gatedByHuman` | boolean | Skill | 是否受人工门控（需用户确认） |
+| `requiresPlanMode` | boolean | Skill | 是否需要进入 Plan 模式 |
+| `targets` | string[] | Validator | 验证目标（如 `["build", "manual"]`） |
 
 ## 开发 Skill 插件
 
@@ -78,14 +94,11 @@ plugins/core/skill-example/
   "dependencies": ["provider:state-store"],
   "provides": ["skill:example"],
   "metadata": {
-    "stage": "execution",
-    "requiresPlanMode": false,
+    "gatedByCode": false,
     "gatedByHuman": false,
-    "gatedByCode": false
+    "requiresPlanMode": false
   },
-  "config": {
-    "timeout": 30000
-  }
+  "config": {}
 }
 ```
 
@@ -442,6 +455,12 @@ plugins/core/my-skill/
     {
       "name": "my-skill",
       "source": "my-skill",
+      "enabled": true,
+      "config": {}
+    },
+    {
+      "name": "another-plugin",
+      "source": "another-plugin",
       "enabled": true,
       "config": {}
     }

@@ -294,7 +294,7 @@ git rebase upstream/main
 
 - [插件开发指南](docs/plugin-development.md) — 完整的插件创建流程
 - [配置参考](docs/config-reference.md) — 配置文件格式说明
-- [最佳实践](docs/best-practices.md) — 插件设计建议
+- [日常工作流指南](docs/daily-workflow-guide.md) — 使用场景与 Skill 速查
 
 ### 快速开始：创建一个新 Skill 插件
 

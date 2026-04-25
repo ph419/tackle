@@ -140,7 +140,7 @@ Tackle Harness 包含四类插件，共 21 个：
 ```
 your-project/
   .claude/
-    skills/                          # 12 个技能
+    skills/                          # 13 个技能
       skill-task-creator/skill.md
       skill-batch-task-creator/skill.md
       skill-split-work-package/skill.md
@@ -164,7 +164,7 @@ your-project/
 
 ### 安装后技能没有生效？
 
-确保在项目根目录执行了 `npx tackle-harness build`，并且 `.claude/skills/` 目录下有 12 个技能文件夹。
+确保在项目根目录执行了 `npx tackle-harness build`，并且 `.claude/skills/` 目录下有 13 个技能文件夹。
 
 ### 多个项目能否共用？
 
@@ -200,7 +200,6 @@ npm uninstall tackle-harness
 
 - [日常工作流最佳实践](docs/daily-workflow-guide.md) - 按场景的使用手册和 Skill 速查
 - [配置参考](docs/config-reference.md) - 完整的配置文件说明
-- [最佳实践](docs/best-practices.md) - 使用建议和优化技巧
 - [插件开发](docs/plugin-development.md) - 插件架构和开发指南
 - [工作流详解](docs/ai_workflow.md) - 完整的工作流数据流和阶段说明
 
@@ -217,4 +216,4 @@ MIT License - 详见 [LICENSE](LICENSE) 文件
 ## 致谢
 
 本项目借鉴了以下开源项目的优秀设计：
-- DeerFlow - 记忆提取和中间件架构
+- DeerFlow - 记忆提取和插件架构

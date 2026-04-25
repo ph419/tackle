@@ -5,8 +5,8 @@
 ## 目录
 
 - [harness-config.yaml](#harness-config-yaml)
-- [skills-config.yaml](#skills-config-yaml)
-- [workflows-config.yaml](#workflows-config-yaml)
+- ~~[skills-config.yaml](#skills-config-yaml)~~ *(已弃用)*
+- ~~[workflows-config.yaml](#workflows-config-yaml)~~ *(已弃用)*
 - [role-registry.yaml](#role-registry-yaml)
 
 ---
@@ -62,12 +62,13 @@ mcp:
       type: "stdio | http"
       enabled: true
 
-# 中间件配置
-middleware:
-  chain:
-    - "validator"
-    - "logger"
-    - "rate-limiter"
+# ~~中间件配置~~ *(已弃用)*
+# > ⚠️ 弃用说明：中间件链概念已由 Hook 插件系统替代，此配置节不再生效。
+# middleware:
+#   chain:
+#     - "validator"
+#     - "logger"
+#     - "rate-limiter"
 ```
 
 ### 配置项说明
@@ -79,7 +80,7 @@ middleware:
 | roles | object | 否 | 角色系统配置 |
 | memory | object | 否 | 记忆系统配置 |
 | mcp | object | 否 | MCP 协议配置 |
-| middleware | object | 否 | 中间件配置 |
+| ~~middleware~~ | ~~object~~ | ~~否~~ | ~~已弃用，由 Hook 插件系统替代~~ |
 | context_window | object | 否 | 上下文窗口管理配置 |
 
 ---
@@ -126,11 +127,11 @@ context_window:
 
 ---
 
-## skills-config.yaml
+## ~~skills-config.yaml~~ *(已弃用)*
 
-Skills 触发词配置，定义技能的触发规则。
+> ⚠️ **弃用说明**：此配置文件已不再使用。技能触发词现在由各插件的 `plugin.json` 中的 `triggers` 字段定义。
 
-### 配置结构
+### 历史配置结构（仅供参考）
 
 ```yaml
 skills:
@@ -151,21 +152,26 @@ priority:
     skills: ["planner"]
 ```
 
-### 配置项说明
+### 当前实现
 
-| 配置项 | 类型 | 必需 | 描述 |
-|--------|------|------|------|
-| skills | array | 是 | 技能定义列表 |
-| groups | object | 否 | 技能分组 |
-| priority | array | 否 | 优先级定义 |
+技能触发词配置已迁移到各插件的 `plugin.json` 文件中：
+
+```json
+{
+  "name": "skill-example",
+  "type": "skill",
+  "triggers": ["关键词1", "关键词2"],
+  ...
+}
+```
 
 ---
 
-## workflows-config.yaml
+## ~~workflows-config.yaml~~ *(已弃用)*
 
-工作流阶段配置，定义工作流的执行流程。
+> ⚠️ **弃用说明**：此配置文件已不再使用。工作流配置现在由 `harness-config.yaml` 中的 `workflow` 节统一管理。
 
-### 配置结构
+### 历史配置结构（仅供参考）
 
 ```yaml
 workflows:
@@ -193,13 +199,9 @@ hooks:
       command: "command"
 ```
 
-### 配置项说明
+### 当前实现
 
-| 配置项 | 类型 | 必需 | 描述 |
-|--------|------|------|------|
-| workflows | array | 是 | 工作流定义列表 |
-| transitions | object | 否 | 阶段转换规则 |
-| hooks | object | 否 | 钩子定义 |
+工作流配置已合并到 `harness-config.yaml` 的 `workflow` 节中，参见上方 [harness-config.yaml](#harness-config-yaml) 章节。
 
 ---
 

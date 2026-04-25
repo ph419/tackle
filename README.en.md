@@ -146,6 +146,7 @@ Split work package, extract the user module from the monolith into an independen
 | experience-logger | "总结经验" / "log experience" | Record project lessons learned |
 | agent-dispatcher | "批量执行" / "dispatch agents" | Dispatch multiple sub-agents in parallel |
 | workflow-orchestrator | "开始工作流" / "start workflow" | Orchestrate complete workflows |
+| watchdog-manager | "启动守护进程" / "start watchdog" | Start and manage background watchdog daemons |
 
 ## Workflow Overview
 
@@ -167,12 +168,12 @@ Requirement → Plan(P0) → Review(P1) → Execute(P2) → Verify(P3) → Repor
 
 ## Plugin Architecture
 
-Tackle Harness contains 4 plugin types, 19 plugins total:
+Tackle Harness contains 4 plugin types, 21 plugins total:
 
 | Type | Count | Purpose |
 |------|-------|---------|
-| Skill | 12 | Executable skills, directly callable by Claude Code |
-| Provider | 3 | State store, role registry, memory store |
+| Skill | 13 | Executable skills, directly callable by Claude Code |
+| Provider | 4 | State store, role registry, memory store, watchdog |
 | Hook | 2 | Skill gate + session-start plan-mode rule injection |
 | Validator | 2 | Document sync validation, work package validation |
 
@@ -185,7 +186,7 @@ After running `tackle-harness build`, the following is generated in your project
 ```
 your-project/
   .claude/
-    skills/                          # 12 skills
+    skills/                          # 13 skills
       skill-task-creator/skill.md
       skill-batch-task-creator/skill.md
       skill-split-work-package/skill.md
@@ -196,6 +197,7 @@ your-project/
       skill-checklist/skill.md
       skill-completion-report/skill.md
       skill-experience-logger/skill.md
+      skill-watchdog-manager/skill.md
       skill-agent-dispatcher/skill.md
       skill-workflow-orchestrator/skill.md
     hooks/                           # 2 hooks
@@ -208,7 +210,7 @@ your-project/
 
 ### Skills not working after installation?
 
-Make sure you ran `npx tackle-harness build` in your project root, and that `.claude/skills/` contains 12 skill folders.
+Make sure you ran `npx tackle-harness build` in your project root, and that `.claude/skills/` contains 13 skill folders.
 
 ### Can multiple projects share an installation?
 
@@ -244,7 +246,6 @@ These hooks point to scripts in `node_modules/tackle-harness/` and won't affect 
 
 - [Daily Workflow Best Practices](docs/daily-workflow-guide.md) - Scenario-based usage guide and Skill reference
 - [Configuration Reference](docs/config-reference.md) - Complete configuration file documentation
-- [Best Practices](docs/best-practices.md) - Usage tips and optimization techniques
 - [Plugin Development](docs/plugin-development.md) - Plugin architecture and development guide
 - [Workflow Details](docs/ai_workflow.md) - Full workflow data flow and stage descriptions
 
@@ -261,4 +262,4 @@ MIT License - See [LICENSE](LICENSE) file
 ## Acknowledgments
 
 This project draws on excellent designs from the following open-source projects:
-- DeerFlow - Memory extraction and middleware architecture
+- DeerFlow - Memory extraction and plugin architecture

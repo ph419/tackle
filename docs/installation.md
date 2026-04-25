@@ -143,7 +143,7 @@ npx tackle-harness validate
 
 ```
 === Validation Report ===
-Plugins checked: 19
+Plugins checked: 21
 Errors: 0
 Warnings: 0
 
@@ -251,6 +251,7 @@ Claude Code 设置文件，由 `tackle-harness build` 自动更新，包含：
 | split-work-package | 拆分工作包 | 拆分现有工作包 |
 | progress-tracker | 记录进度、保存进度 | 管理项目进度 |
 | team-cleanup | 清理团队 | 清理孤立 agent 团队 |
+| watchdog-manager | 启动守护进程、watchdog | 管理守护进程 |
 | human-checkpoint | 人工检查、检查点 | 人工审核节点 |
 | agent-dispatcher | 批量执行、并行执行 | 调度子代理执行 |
 | workflow-orchestrator | 开始工作流、执行流程 | 运行完整工作流 |
