@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.18] - 2026-05-02
+
+### Fixed
+
+- `harness-build.js` 构建时自动复制 skill 插件的伴生参考文件（`*-reference.md`）到输出目录，并替换 skill.md 中的源码相对路径为输出路径。修复在其他项目目录使用 `skill-agent-dispatcher` 时 `roles-reference.md` 和 `cleanup-reference.md` 找不到的问题
+
 ## [0.0.16] - 2026-04-27
 
 ### Fixed
@@ -156,6 +162,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 插件注册表 (`plugin-registry.json`)
 - 运行时层：harness-build、plugin-loader、event-bus、state-store、config-manager、logger
 
+[0.0.18]: https://github.com/ph419/tackle/compare/v0.0.17...v0.0.18
+[0.0.17]: https://github.com/ph419/tackle/compare/v0.0.16...v0.0.17
+[0.0.16]: https://github.com/ph419/tackle/compare/v0.0.15...v0.0.16
 [0.0.15]: https://github.com/ph419/tackle/compare/v0.0.14...v0.0.15
 [0.0.14]: https://github.com/ph419/tackle/compare/v0.0.13...v0.0.14
 [0.0.13]: https://github.com/ph419/tackle/compare/v0.0.12...v0.0.13

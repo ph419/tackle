@@ -450,10 +450,26 @@ HarnessBuild.prototype._buildSkillPlugin = function _buildSkillPlugin(name, plug
   // Ensure output directory exists
   this._ensureDir(outputDir);
 
+  // Copy companion reference files (*.md except skill.md) to output directory
+  var companionFiles = fs.readdirSync(pluginDir).filter(function(f) {
+    return f !== 'skill.md' && f !== 'plugin.json' && f.endsWith('.md');
+  });
+  companionFiles.forEach(function(refFile) {
+    var src = path.join(pluginDir, refFile);
+    var dest = path.join(outputDir, refFile);
+    fs.writeFileSync(dest, fs.readFileSync(src, 'utf-8'), 'utf-8');
+    files.push(dest);
+  });
+
   // Check if source skill.md exists
   if (fs.existsSync(skillMdSrc)) {
     // Read the source skill content
     var content = fs.readFileSync(skillMdSrc, 'utf-8');
+
+    // Replace source-relative paths with output-relative paths
+    var sourcePath = 'plugins/core/' + name + '/';
+    var targetPath = '.claude/skills/' + name + '/';
+    content = content.split(sourcePath).join(targetPath);
 
     // If the skill.md has a front-matter header, keep it.
     // If not, generate one from plugin.json metadata.
