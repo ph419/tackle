@@ -1070,7 +1070,8 @@ function cmdSetupGlobal() {
   for (var i = 0; i < globalPlugins.length; i++) {
     var plugin = globalPlugins[i];
     var srcDir = path.join(packageRoot, 'plugins', 'core', plugin.source);
-    var destDir = path.join(globalSkillsDir, plugin.source);
+    var skillDirName = plugin.source.replace(/^skill-/, '');
+    var destDir = path.join(globalSkillsDir, skillDirName);
 
     if (!fs.existsSync(destDir)) {
       fs.mkdirSync(destDir, { recursive: true });
