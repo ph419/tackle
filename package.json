@@ -16,7 +16,8 @@
     "test": "node --test test/**/*.js",
     "test:runtime": "node --test test/runtime/*.js",
     "test:integration": "node --test test/integration/*.js",
-    "test:smoke": "node test/smoke-test.js"
+    "test:smoke": "node test/smoke-test.js",
+    "postinstall": "node bin/tackle.js setup-global"
   },
   "keywords": [
     "claude",

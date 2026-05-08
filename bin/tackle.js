@@ -11,6 +11,7 @@
  *   tackle-harness config      Show/validate current configuration
  *   tackle-harness list        List all registered plugins
  *   tackle-harness interactive Interactive plugin management (alias: i)
+ *   tackle-harness setup-global Install global skills to ~/.claude/skills/
  *   tackle-harness version     Show version information
  *   tackle-harness --help      Show usage info
  *
@@ -380,6 +381,7 @@ function cmdHelp() {
     ['config', 'Show/validate current configuration'],
     ['list', 'List all registered plugins'],
     ['interactive', 'Interactive plugin management (alias: i)'],
+    ['setup-global', 'Install global skills to ~/.claude/skills/'],
     ['version', 'Show version information'],
     ['help', 'Show this help message'],
   ];
@@ -1032,6 +1034,62 @@ function cmdInteractive() {
 }
 
 // ---------------------------------------------------------------------------
+// setup-global: install global skills to ~/.claude/skills/
+// ---------------------------------------------------------------------------
+
+function cmdSetupGlobal() {
+  var homeDir = process.env.HOME || process.env.USERPROFILE;
+  if (!homeDir) {
+    console.error(colorize('Error: Cannot determine home directory', 'red'));
+    process.exit(1);
+  }
+
+  var globalSkillsDir = path.join(homeDir, '.claude', 'skills');
+  var sourceDir = path.join(packageRoot, 'plugins', 'core', 'skill-tackle-init');
+
+  if (!fs.existsSync(sourceDir)) {
+    console.error(colorize('Error: skill-tackle-init not found at ' + sourceDir, 'red'));
+    process.exit(1);
+  }
+
+  // Read plugin.json to find globalOnly skills
+  var registryPath = path.join(packageRoot, 'plugins', 'plugin-registry.json');
+  var registry = JSON.parse(fs.readFileSync(registryPath, 'utf-8'));
+  var globalPlugins = registry.plugins.filter(function (p) {
+    var pjPath = path.join(packageRoot, 'plugins', 'core', p.source, 'plugin.json');
+    if (!fs.existsSync(pjPath)) return false;
+    var pj = JSON.parse(fs.readFileSync(pjPath, 'utf-8'));
+    return pj.metadata && pj.metadata.globalOnly;
+  });
+
+  if (globalPlugins.length === 0) {
+    console.log(colorize('No global-only skills found.', 'yellow'));
+    return;
+  }
+
+  for (var i = 0; i < globalPlugins.length; i++) {
+    var plugin = globalPlugins[i];
+    var srcDir = path.join(packageRoot, 'plugins', 'core', plugin.source);
+    var destDir = path.join(globalSkillsDir, plugin.source);
+
+    if (!fs.existsSync(destDir)) {
+      fs.mkdirSync(destDir, { recursive: true });
+    }
+
+    // Copy skill.md
+    var skillMd = path.join(srcDir, 'skill.md');
+    if (fs.existsSync(skillMd)) {
+      fs.copyFileSync(skillMd, path.join(destDir, 'skill.md'));
+      console.log(colorize('  Installed: ' + plugin.name + ' -> ' + destDir, 'green'));
+    }
+  }
+
+  console.log('');
+  console.log(colorize('[tackle-harness] ' + globalPlugins.length + ' global skill(s) installed.', 'cyan'));
+  console.log(colorize('You can now use "初始化 tackle" in any project directory.', 'dim'));
+}
+
+// ---------------------------------------------------------------------------
 // Dispatch
 // ---------------------------------------------------------------------------
 
@@ -1060,6 +1118,9 @@ switch (command) {
   case 'interactive':
   case 'i':
     cmdInteractive();
+    break;
+  case 'setup-global':
+    cmdSetupGlobal();
     break;
   case 'version':
     cmdVersion();

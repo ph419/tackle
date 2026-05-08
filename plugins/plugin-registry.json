@@ -145,6 +145,12 @@
       "source": "skill-watchdog-manager",
       "enabled": true,
       "config": {}
+    },
+    {
+      "name": "skill-tackle-init",
+      "source": "skill-tackle-init",
+      "enabled": true,
+      "config": {}
     }
   ]
 }
