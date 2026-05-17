@@ -4,7 +4,6 @@
   "type": "skill",
   "description": "Use when user says '初始化 tackle', 'init tackle', 'setup tackle', or wants to initialize tackle-harness in the current project directory",
   "metadata": {
-    "globalOnly": true,
     "triggers": ["初始化 tackle", "init tackle", "setup tackle", "初始化 harness"]
   }
 }

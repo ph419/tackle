@@ -3,7 +3,7 @@
 > 基于插件的 AI Agent 工作流框架，为 Claude Code 提供任务管理、工作流编排、角色管理等能力
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-0.0.23-blue.svg)](https://github.com/ph419/tackle)
+[![Version](https://img.shields.io/badge/version-0.0.24-blue.svg)](https://github.com/ph419/tackle)
 
 **[English](README.en.md)**
 
@@ -123,6 +123,7 @@ tackle-harness build
 | completion-report | "完成报告" / "completion report" | 生成完成报告 |
 | experience-logger | "总结经验" / "log experience" | 记录项目经验教训 |
 | watchdog-manager | "启动守护进程" / "start watchdog" | 启动和管理后台守护进程 |
+| task-archive | "任务归档" / "archive tasks" | 归档已完成工作包 |
 | agent-dispatcher | "批量执行" / "dispatch agents" | 调度多个子代理并行工作 |
 | workflow-orchestrator | "开始工作流" / "start workflow" | 编排完整工作流 |
 
@@ -146,11 +147,11 @@ tackle-harness build
 
 ## 插件架构
 
-Tackle Harness 包含四类插件，共 21 个：
+Tackle Harness 包含四类插件，共 23 个：
 
 | 类型 | 数量 | 作用 |
 |------|------|------|
-| Skill | 13 | 可执行技能，Claude Code 直接调用 |
+| Skill | 15 | 可执行技能，Claude Code 直接调用 |
 | Provider | 4 | 状态存储、角色注册、记忆存储、守护进程 |
 | Hook | 2 | 技能门控 + 会话启动时注入 plan-mode 规则 |
 | Validator | 2 | 文档同步验证、工作包验证 |

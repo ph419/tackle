@@ -7,6 +7,7 @@
  *   tackle-harness build       Same as above (default command)
  *   tackle-harness validate    Validate plugin.json files without building
  *   tackle-harness init        First-time setup: build + generate default config
+ *   tackle-harness migrate     Migrate legacy project structure to global setup
  *   tackle-harness status      Show build status and plugin statistics
  *   tackle-harness config      Show/validate current configuration
  *   tackle-harness list        List all registered plugins
@@ -112,7 +113,14 @@ function colorize(text, color) {
 
 // Override target root if --root flag provided
 if (flags.root) {
-  var resolvedRoot = path.resolve(flags.root);
+  // Fix Windows absolute path handling: D:path (no backslash) -> D:\path
+  // Node's path.resolve treats D:path as relative to CWD on Windows
+  var rootPath = flags.root;
+  if (/^[a-zA-Z]:[^\\\/]/.test(rootPath)) {
+    // Matches bare drive letter without separator: D:path
+    rootPath = rootPath.substring(0, 2) + '\\' + rootPath.substring(2);
+  }
+  var resolvedRoot = path.resolve(rootPath);
 
   // Security check: prevent path traversal attacks
   // Ensure the resolved path is accessible and doesn't escape obvious boundaries
@@ -145,6 +153,7 @@ if (flags.root) {
 function createBuilder() {
   return new HarnessBuild({
     rootDir: targetRoot,
+    packageRoot: packageRoot,
     registryPath: path.join(packageRoot, 'plugins', 'plugin-registry.json'),
     pluginsDir: path.join(packageRoot, 'plugins', 'core'),
     outputSkillsDir: path.join(targetRoot, '.claude', 'skills'),
@@ -173,10 +182,33 @@ function cmdBuild() {
     }
   }
 
-  console.log(colorize('[tackle-harness] Building plugins...', 'cyan'));
+  // Detect if running in global mode (using --root to build external project)
+  var isGlobalMode = flags.root !== null && targetRoot !== process.cwd();
+
+  if (isGlobalMode) {
+    console.log(colorize('[tackle-harness] Global mode detected (building external project)', 'cyan'));
+    console.log('[tackle-harness] Skills and hooks will remain in the global installation.');
+    console.log('[tackle-harness] Only settings.json will be updated in the target project.');
+    console.log('');
+  } else {
+    console.log(colorize('[tackle-harness] Building plugins...', 'cyan'));
+  }
 
   var builder = createBuilder();
-  var result = builder.build();
+  var result;
+
+  if (isGlobalMode) {
+    // Global mode: skip building skills/hooks to project, only update settings
+    result = {
+      success: true,
+      built: [],
+      errors: [],
+      summary: '=== Build Report (Global Mode) ===\n\nInstallation: Global (external project)\nSkills output: ' + packageRoot + ' (global)\nHooks output:  ' + packageRoot + ' (global)\n\nNo files written to target project.\nSkills and hooks are read from global installation.\n\nBuild SUCCEEDED (global mode)\n'
+    };
+  } else {
+    // Local mode: build normally
+    result = builder.build();
+  }
 
   if (result.success) {
     if (flags.verbose) {
@@ -199,7 +231,11 @@ function cmdBuild() {
   if (result.success) {
     console.log(colorize('[tackle-harness] Settings updated: .claude/settings.json', 'green'));
     console.log(colorize('[tackle-harness] CLAUDE.md rules injected.', 'green'));
-    console.log(colorize('[tackle-harness] Done! Skills are ready to use.', 'green'));
+    if (isGlobalMode) {
+      console.log(colorize('[tackle-harness] Done! Project configured for global skills/hooks.', 'green'));
+    } else {
+      console.log(colorize('[tackle-harness] Done! Skills are ready to use.', 'green'));
+    }
   }
 
   process.exit(result.success ? 0 : 1);
@@ -302,6 +338,9 @@ function cmdInit() {
   console.log('[tackle-harness] Package root:   ' + packageRoot);
   console.log('');
 
+  var hasLegacyStructure = false;
+  var cleanupActions = [];
+
   // 1. Ensure .claude/ directory exists
   var claudeDir = path.join(targetRoot, '.claude');
   if (!fs.existsSync(claudeDir)) {
@@ -361,8 +400,210 @@ function cmdInit() {
     console.log('[tackle-harness] harness-manifest.json already exists, skipping');
   }
 
-  // 5. Run build
-  cmdBuild();
+  // 4.5. Create settings.json with hook registration (global mode)
+  var builder = createBuilder();
+  builder.updateSettings(targetRoot, packageRoot);
+  console.log('[tackle-harness] Created .claude/settings.json with global hook registration');
+
+  // 5. Detect and clean up legacy project-level hooks registration
+  // Only remove hooks with relative paths (old local installation), keep absolute paths (global mode)
+  var settingsPath = path.join(claudeDir, 'settings.json');
+  if (fs.existsSync(settingsPath)) {
+    try {
+      var settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+      var hadProjectHooks = false;
+
+      // Helper to check if a hook command uses a relative path (legacy local install)
+      function isLegacyLocalHook(command) {
+        if (!command) return false;
+        // Check for relative path patterns: "../" or no drive letter on Windows
+        return command.indexOf('../') !== -1 || command.indexOf('..\\') !== -1 ||
+               (command.indexOf('node "') === 0 && !/[a-zA-Z]:/.test(command) && command.indexOf('./') === -1);
+      }
+
+      // Check for PreToolUse hooks (Edit|Write gate)
+      if (settings.hooks && settings.hooks.PreToolUse && settings.hooks.PreToolUse.length > 0) {
+        var preMatcher = 'Edit|Write';
+        for (var i = 0; i < settings.hooks.PreToolUse.length; i++) {
+          if (settings.hooks.PreToolUse[i].matcher === preMatcher) {
+            var hookCmd = settings.hooks.PreToolUse[i].hooks && settings.hooks.PreToolUse[i].hooks[0] && settings.hooks.PreToolUse[i].hooks[0].command;
+            if (isLegacyLocalHook(hookCmd)) {
+              settings.hooks.PreToolUse.splice(i, 1);
+              i--;
+              hadProjectHooks = true;
+            }
+          }
+        }
+      }
+
+      // Check for PostToolUse hooks (Skill gate)
+      if (settings.hooks && settings.hooks.PostToolUse && settings.hooks.PostToolUse.length > 0) {
+        var postMatcher = 'Skill';
+        for (var j = 0; j < settings.hooks.PostToolUse.length; j++) {
+          if (settings.hooks.PostToolUse[j].matcher === postMatcher) {
+            var hookCmd = settings.hooks.PostToolUse[j].hooks && settings.hooks.PostToolUse[j].hooks[0] && settings.hooks.PostToolUse[j].hooks[0].command;
+            if (isLegacyLocalHook(hookCmd)) {
+              settings.hooks.PostToolUse.splice(j, 1);
+              j--;
+              hadProjectHooks = true;
+            }
+          }
+        }
+      }
+
+      // Check for SessionStart hooks (plan-mode rules)
+      if (settings.hooks && settings.hooks.SessionStart && settings.hooks.SessionStart.length > 0) {
+        var sessionMatcher = 'startup|clear|compact';
+        for (var k = 0; k < settings.hooks.SessionStart.length; k++) {
+          if (settings.hooks.SessionStart[k].matcher === sessionMatcher) {
+            var hookCmd = settings.hooks.SessionStart[k].hooks && settings.hooks.SessionStart[k].hooks[0] && settings.hooks.SessionStart[k].hooks[0].command;
+            if (isLegacyLocalHook(hookCmd)) {
+              settings.hooks.SessionStart.splice(k, 1);
+              k--;
+              hadProjectHooks = true;
+            }
+          }
+        }
+      }
+
+      if (hadProjectHooks) {
+        fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n', 'utf-8');
+        console.log(colorize('[tackle-harness] Cleaned up legacy project-level hooks registration', 'yellow'));
+        hasLegacyStructure = true;
+        cleanupActions.push('Removed project-level hooks from .claude/settings.json');
+      }
+    } catch (err) {
+      console.error('[tackle-harness] Warning: Failed to clean up project-level hooks');
+      console.error('[tackle-harness] Error: ' + err.message);
+    }
+  }
+
+  // 6. Detect and clean up legacy project-level skills
+  var projectSkillsDir = path.join(claudeDir, 'skills');
+  if (fs.existsSync(projectSkillsDir)) {
+    try {
+      var registryPath = path.join(packageRoot, 'plugins', 'plugin-registry.json');
+      var registry = JSON.parse(fs.readFileSync(registryPath, 'utf-8'));
+      var globalSkillNames = {};
+
+      // Build set of global skill names (both with and without 'skill-' prefix)
+      for (var m = 0; m < registry.plugins.length; m++) {
+        var p = registry.plugins[m];
+        var metaPath = path.join(packageRoot, 'plugins', 'core', p.source || p.name, 'plugin.json');
+        if (fs.existsSync(metaPath)) {
+          try {
+            var meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+            if (meta.type === 'skill') {
+              var fullName = meta.name || p.name;
+              // Store both full name (with skill- prefix) and short name (without prefix)
+              globalSkillNames[fullName] = true;
+              if (fullName.indexOf('skill-') === 0) {
+                var shortName = fullName.substring(6); // remove 'skill-' prefix
+                globalSkillNames[shortName] = true;
+              }
+            }
+          } catch (e) {
+            // skip unparseable plugins
+          }
+        }
+      }
+
+      // Check project skills directory for duplicates
+      var projectSkills = fs.readdirSync(projectSkillsDir);
+      var removedSkills = [];
+
+      for (var n = 0; n < projectSkills.length; n++) {
+        var skillName = projectSkills[n];
+        var skillPath = path.join(projectSkillsDir, skillName);
+
+        // Only remove directories that match global skill names
+        if (globalSkillNames[skillName] && fs.statSync(skillPath).isDirectory()) {
+          fs.rmSync(skillPath, { recursive: true, force: true });
+          removedSkills.push(skillName);
+        }
+      }
+
+      if (removedSkills.length > 0) {
+        console.log(colorize('[tackle-harness] Cleaned up ' + removedSkills.length + ' project-level skills (now available globally)', 'yellow'));
+        hasLegacyStructure = true;
+        cleanupActions.push('Removed ' + removedSkills.length + ' project-level skills (now available globally)');
+
+        // Try to remove empty skills directory
+        try {
+          var remainingSkillEntries = fs.readdirSync(projectSkillsDir);
+          if (remainingSkillEntries.length === 0) {
+            fs.rmdirSync(projectSkillsDir);
+            console.log('[tackle-harness] Removed empty .claude/skills/ directory');
+          }
+        } catch (e) {
+          // directory not empty or other error, leave it
+        }
+      }
+    } catch (err) {
+      console.error('[tackle-harness] Warning: Failed to clean up project-level skills');
+      console.error('[tackle-harness] Error: ' + err.message);
+    }
+  }
+
+  // 7. Detect and clean up legacy project-level hooks
+  var projectHooksDir = path.join(claudeDir, 'hooks');
+  if (fs.existsSync(projectHooksDir)) {
+    try {
+      var hookEntries = fs.readdirSync(projectHooksDir);
+      var removedHooks = [];
+
+      for (var o = 0; o < hookEntries.length; o++) {
+        var hookName = hookEntries[o];
+        var hookPath = path.join(projectHooksDir, hookName);
+
+        // Remove all hook directories (they should be global now)
+        if (fs.statSync(hookPath).isDirectory()) {
+          fs.rmSync(hookPath, { recursive: true, force: true });
+          removedHooks.push(hookName);
+        }
+      }
+
+      if (removedHooks.length > 0) {
+        console.log(colorize('[tackle-harness] Cleaned up ' + removedHooks.length + ' project-level hooks (now available globally)', 'yellow'));
+        hasLegacyStructure = true;
+        cleanupActions.push('Removed ' + removedHooks.length + ' project-level hooks (now available globally)');
+      }
+
+      // Try to remove empty hooks directory
+      try {
+        var remainingEntries = fs.readdirSync(projectHooksDir);
+        if (remainingEntries.length === 0) {
+          fs.rmdirSync(projectHooksDir);
+          console.log('[tackle-harness] Removed empty .claude/hooks/ directory');
+        }
+      } catch (e) {
+        // directory not empty or other error, leave it
+      }
+    } catch (err) {
+      console.error('[tackle-harness] Warning: Failed to clean up project-level hooks');
+      console.error('[tackle-harness] Error: ' + err.message);
+    }
+  }
+
+  // 8. Inject CLAUDE.md plan-mode rules (independent of build)
+  builder.injectClaudeMdRules(targetRoot);
+
+  // 9. Print migration summary if legacy structure was detected
+  if (hasLegacyStructure) {
+    console.log('');
+    console.log(colorize('[tackle-harness] === Migration Summary ===', 'cyan'));
+    console.log(colorize('[tackle-harness] Your project has been updated to use global skills/hooks.', 'cyan'));
+    console.log('');
+    for (var q = 0; q < cleanupActions.length; q++) {
+      console.log('  - ' + cleanupActions[q]);
+    }
+    console.log('');
+    console.log(colorize('[tackle-harness] All tackle-harness skills and hooks are now available globally.', 'green'));
+    console.log(colorize('[tackle-harness] Your project only needs configuration files to use them.', 'green'));
+    console.log('');
+  }
+
+  console.log(colorize('[tackle-harness] Done! Your project is ready to use tackle-harness.', 'green'));
 }
 
 function cmdHelp() {
@@ -377,6 +618,7 @@ function cmdHelp() {
     ['validate', 'Validate plugin.json files'],
     ['validate-config', 'Validate harness-config.yaml'],
     ['init', 'First-time setup (build + config)'],
+    ['migrate', 'Migrate legacy project structure to global setup'],
     ['status', 'Show build status and plugin statistics'],
     ['config', 'Show/validate current configuration'],
     ['list', 'List all registered plugins'],
@@ -722,11 +964,248 @@ function cmdVersion() {
   process.exit(0);
 }
 
+function cmdMigrate() {
+  console.log(colorize('[tackle-harness] Migrating legacy project structure...', 'cyan'));
+  console.log('[tackle-harness] Target project: ' + targetRoot);
+  console.log('');
+
+  var hasLegacyStructure = false;
+  var cleanupActions = [];
+
+  // 1. Detect and clean up legacy project-level hooks registration
+  // Only remove hooks with relative paths (old local installation), keep absolute paths (global mode)
+  var settingsPath = path.join(targetRoot, '.claude', 'settings.json');
+  if (fs.existsSync(settingsPath)) {
+    try {
+      var settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+      var hadProjectHooks = false;
+
+      // Helper to check if a hook command uses a relative path (legacy local install)
+      function isLegacyLocalHook(command) {
+        if (!command) return false;
+        // Check for relative path patterns: "../" or no drive letter on Windows
+        return command.indexOf('../') !== -1 || command.indexOf('..\\') !== -1 ||
+               (command.indexOf('node "') === 0 && !/[a-zA-Z]:/.test(command) && command.indexOf('./') === -1);
+      }
+
+      // Check for PreToolUse hooks (Edit|Write gate)
+      if (settings.hooks && settings.hooks.PreToolUse && settings.hooks.PreToolUse.length > 0) {
+        var preMatcher = 'Edit|Write';
+        for (var i = 0; i < settings.hooks.PreToolUse.length; i++) {
+          if (settings.hooks.PreToolUse[i].matcher === preMatcher) {
+            var hookCmd = settings.hooks.PreToolUse[i].hooks && settings.hooks.PreToolUse[i].hooks[0] && settings.hooks.PreToolUse[i].hooks[0].command;
+            if (isLegacyLocalHook(hookCmd)) {
+              settings.hooks.PreToolUse.splice(i, 1);
+              i--;
+              hadProjectHooks = true;
+            }
+          }
+        }
+      }
+
+      // Check for PostToolUse hooks (Skill gate)
+      if (settings.hooks && settings.hooks.PostToolUse && settings.hooks.PostToolUse.length > 0) {
+        var postMatcher = 'Skill';
+        for (var j = 0; j < settings.hooks.PostToolUse.length; j++) {
+          if (settings.hooks.PostToolUse[j].matcher === postMatcher) {
+            var hookCmd = settings.hooks.PostToolUse[j].hooks && settings.hooks.PostToolUse[j].hooks[0] && settings.hooks.PostToolUse[j].hooks[0].command;
+            if (isLegacyLocalHook(hookCmd)) {
+              settings.hooks.PostToolUse.splice(j, 1);
+              j--;
+              hadProjectHooks = true;
+            }
+          }
+        }
+      }
+
+      // Check for SessionStart hooks (plan-mode rules)
+      if (settings.hooks && settings.hooks.SessionStart && settings.hooks.SessionStart.length > 0) {
+        var sessionMatcher = 'startup|clear|compact';
+        for (var k = 0; k < settings.hooks.SessionStart.length; k++) {
+          if (settings.hooks.SessionStart[k].matcher === sessionMatcher) {
+            var hookCmd = settings.hooks.SessionStart[k].hooks && settings.hooks.SessionStart[k].hooks[0] && settings.hooks.SessionStart[k].hooks[0].command;
+            if (isLegacyLocalHook(hookCmd)) {
+              settings.hooks.SessionStart.splice(k, 1);
+              k--;
+              hadProjectHooks = true;
+            }
+          }
+        }
+      }
+
+      if (hadProjectHooks) {
+        fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n', 'utf-8');
+        console.log(colorize('[tackle-harness] Removed project-level hooks from settings.json', 'yellow'));
+        hasLegacyStructure = true;
+        cleanupActions.push('Removed project-level hooks');
+      }
+    } catch (err) {
+      console.error('[tackle-harness] Warning: Failed to clean up project-level hooks');
+      console.error('[tackle-harness] Error: ' + err.message);
+    }
+  }
+
+  // 2. Detect and clean up legacy project-level skills
+  var projectSkillsDir = path.join(targetRoot, '.claude', 'skills');
+  if (fs.existsSync(projectSkillsDir)) {
+    try {
+      var registryPath = path.join(packageRoot, 'plugins', 'plugin-registry.json');
+      var registry = JSON.parse(fs.readFileSync(registryPath, 'utf-8'));
+      var globalSkillNames = {};
+
+      // Build set of global skill names (both with and without 'skill-' prefix)
+      for (var m = 0; m < registry.plugins.length; m++) {
+        var p = registry.plugins[m];
+        var metaPath = path.join(packageRoot, 'plugins', 'core', p.source || p.name, 'plugin.json');
+        if (fs.existsSync(metaPath)) {
+          try {
+            var meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+            if (meta.type === 'skill') {
+              var fullName = meta.name || p.name;
+              // Store both full name (with skill- prefix) and short name (without prefix)
+              globalSkillNames[fullName] = true;
+              if (fullName.indexOf('skill-') === 0) {
+                var shortName = fullName.substring(6); // remove 'skill-' prefix
+                globalSkillNames[shortName] = true;
+              }
+            }
+          } catch (e) {
+            // skip unparseable plugins
+          }
+        }
+      }
+
+      // Check project skills directory for duplicates
+      var projectSkills = fs.readdirSync(projectSkillsDir);
+      var removedSkills = [];
+
+      for (var n = 0; n < projectSkills.length; n++) {
+        var skillName = projectSkills[n];
+        var skillPath = path.join(projectSkillsDir, skillName);
+
+        // Only remove directories that match global skill names
+        if (globalSkillNames[skillName] && fs.statSync(skillPath).isDirectory()) {
+          fs.rmSync(skillPath, { recursive: true, force: true });
+          removedSkills.push(skillName);
+        }
+      }
+
+      if (removedSkills.length > 0) {
+        console.log(colorize('[tackle-harness] Removed ' + removedSkills.length + ' project-level skills (now available globally)', 'yellow'));
+        hasLegacyStructure = true;
+        cleanupActions.push('Removed ' + removedSkills.length + ' project-level skills');
+
+        // Try to remove empty skills directory
+        try {
+          var remainingSkillEntries = fs.readdirSync(projectSkillsDir);
+          if (remainingSkillEntries.length === 0) {
+            fs.rmdirSync(projectSkillsDir);
+            console.log('[tackle-harness] Removed empty .claude/skills/ directory');
+          }
+        } catch (e) {
+          // directory not empty or other error, leave it
+        }
+      }
+    } catch (err) {
+      console.error('[tackle-harness] Warning: Failed to clean up project-level skills');
+      console.error('[tackle-harness] Error: ' + err.message);
+    }
+  }
+
+  // 3. Detect and clean up legacy project-level hooks
+  var projectHooksDir = path.join(targetRoot, '.claude', 'hooks');
+  if (fs.existsSync(projectHooksDir)) {
+    try {
+      var hookEntries = fs.readdirSync(projectHooksDir);
+      var removedHooks = [];
+
+      for (var o = 0; o < hookEntries.length; o++) {
+        var hookName = hookEntries[o];
+        var hookPath = path.join(projectHooksDir, hookName);
+
+        // Remove all hook directories (they should be global now)
+        if (fs.statSync(hookPath).isDirectory()) {
+          fs.rmSync(hookPath, { recursive: true, force: true });
+          removedHooks.push(hookName);
+        }
+      }
+
+      if (removedHooks.length > 0) {
+        console.log(colorize('[tackle-harness] Removed ' + removedHooks.length + ' project-level hooks (now available globally)', 'yellow'));
+        hasLegacyStructure = true;
+        cleanupActions.push('Removed ' + removedHooks.length + ' project-level hooks');
+
+        // Try to remove empty hooks directory
+        try {
+          var remainingEntries = fs.readdirSync(projectHooksDir);
+          if (remainingEntries.length === 0) {
+            fs.rmdirSync(projectHooksDir);
+            console.log('[tackle-harness] Removed empty .claude/hooks/ directory');
+          }
+        } catch (e) {
+          // directory not empty or other error, leave it
+        }
+      }
+    } catch (err) {
+      console.error('[tackle-harness] Warning: Failed to clean up project-level hooks');
+      console.error('[tackle-harness] Error: ' + err.message);
+    }
+  }
+
+  // 4. Inject CLAUDE.md plan-mode rules
+  var builder = createBuilder();
+  builder.injectClaudeMdRules(targetRoot);
+
+  // 5. Print migration summary
+  if (!hasLegacyStructure) {
+    console.log(colorize('[tackle-harness] No legacy structure found. Project is already using global setup.', 'green'));
+  } else {
+    console.log('');
+    console.log(colorize('[tackle-harness] === Migration Complete ===', 'cyan'));
+    console.log('');
+    for (var q = 0; q < cleanupActions.length; q++) {
+      console.log('  - ' + cleanupActions[q]);
+    }
+    console.log('');
+    console.log(colorize('[tackle-harness] All tackle-harness skills and hooks are now available globally.', 'green'));
+    console.log(colorize('[tackle-harness] Your project only needs configuration files to use them.', 'green'));
+    console.log('');
+  }
+
+  console.log(colorize('[tackle-harness] Done! Your project is ready to use tackle-harness.', 'green'));
+  process.exit(0);
+}
+
 function cmdInteractive() {
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout
   });
+
+  // Security check: prevent modifications to global registry
+  // when running in interactive mode from a project directory
+  const globalRegistryPath = path.join(packageRoot, 'plugins', 'plugin-registry.json');
+  const projectRegistryPath = path.join(targetRoot, '.claude', 'plugin-registry.json');
+
+  // Warn if trying to modify global registry from project directory
+  if (targetRoot !== packageRoot && targetRoot.indexOf(path.join(packageRoot, '..')) !== 0) {
+    // Check if user is trying to modify global registry
+    const settingsPath = path.join(targetRoot, '.claude', 'settings.json');
+    if (fs.existsSync(settingsPath)) {
+      try {
+        const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+        // Check if this project has global registry references
+        if (settings.globalRegistry || settings.hooks && settings.hooks.global) {
+          console.warn(colorize('[tackle-harness] Warning: Interactive mode should not modify global registry.', 'yellow'));
+          console.warn(colorize('[tackle-harness] Use project manifest (.claude/harness-manifest.json) for project-specific overrides.', 'yellow'));
+          console.warn(colorize('[tackle-harness] Global registry is managed by npm install -g tackle-harness', 'yellow'));
+          console.log('');
+        }
+      } catch (e) {
+        // ignore parse errors
+      }
+    }
+  }
 
   const registryPath = path.join(packageRoot, 'plugins', 'plugin-registry.json');
   let registry;
@@ -1034,7 +1513,7 @@ function cmdInteractive() {
 }
 
 // ---------------------------------------------------------------------------
-// setup-global: install global skills to ~/.claude/skills/
+// setup-global: install all skills and hooks globally to ~/.claude/
 // ---------------------------------------------------------------------------
 
 function cmdSetupGlobal() {
@@ -1044,50 +1523,53 @@ function cmdSetupGlobal() {
     process.exit(1);
   }
 
-  var globalSkillsDir = path.join(homeDir, '.claude', 'skills');
-  var sourceDir = path.join(packageRoot, 'plugins', 'core', 'skill-tackle-init');
+  console.log(colorize('[tackle-harness] Installing global skills and hooks...', 'cyan'));
+  console.log('[tackle-harness] Home directory: ' + homeDir);
+  console.log('[tackle-harness] Package root:   ' + packageRoot);
+  console.log('');
 
-  if (!fs.existsSync(sourceDir)) {
-    console.error(colorize('Error: skill-tackle-init not found at ' + sourceDir, 'red'));
-    process.exit(1);
-  }
-
-  // Read plugin.json to find globalOnly skills
-  var registryPath = path.join(packageRoot, 'plugins', 'plugin-registry.json');
-  var registry = JSON.parse(fs.readFileSync(registryPath, 'utf-8'));
-  var globalPlugins = registry.plugins.filter(function (p) {
-    var pjPath = path.join(packageRoot, 'plugins', 'core', p.source, 'plugin.json');
-    if (!fs.existsSync(pjPath)) return false;
-    var pj = JSON.parse(fs.readFileSync(pjPath, 'utf-8'));
-    return pj.metadata && pj.metadata.globalOnly;
+  // Create a global builder with home directory as target
+  var globalBuilder = new HarnessBuild({
+    targetRoot: homeDir,
+    packageRoot: packageRoot,
+    registryPath: path.join(packageRoot, 'plugins', 'plugin-registry.json'),
+    pluginsDir: path.join(packageRoot, 'plugins', 'core'),
+    outputSkillsDir: path.join(homeDir, '.claude', 'skills'),
+    outputHooksDir: path.join(homeDir, '.claude', 'hooks'),
+    verbose: flags.verbose,
+    globalMode: true, // Enable global mode for default context config
+    cliPath: process.argv[1] || path.join(packageRoot, 'bin', 'tackle.js'), // For __TACKLE_CLI_PATH__ replacement
   });
 
-  if (globalPlugins.length === 0) {
-    console.log(colorize('No global-only skills found.', 'yellow'));
-    return;
+  // Build all plugins (skills + hooks)
+  var result = globalBuilder.build();
+
+  if (result.success) {
+    if (flags.verbose) {
+      console.log(colorize('[tackle-harness] Updating global settings.json...', 'dim'));
+    }
+    // Register hooks in global settings.json
+    globalBuilder.updateSettings(homeDir, packageRoot);
   }
 
-  for (var i = 0; i < globalPlugins.length; i++) {
-    var plugin = globalPlugins[i];
-    var srcDir = path.join(packageRoot, 'plugins', 'core', plugin.source);
-    var skillDirName = plugin.source.replace(/^skill-/, '');
-    var destDir = path.join(globalSkillsDir, skillDirName);
+  // Apply colors to summary output
+  var coloredSummary = result.summary
+    .replace(/Build SUCCEEDED/g, colorize('Build SUCCEEDED', 'green'))
+    .replace(/Build COMPLETED WITH ERRORS/g, colorize('Build COMPLETED WITH ERRORS', 'yellow'))
+    .replace(/Validation PASSED/g, colorize('Validation PASSED', 'green'))
+    .replace(/Validation FAILED/g, colorize('Validation FAILED', 'red'));
 
-    if (!fs.existsSync(destDir)) {
-      fs.mkdirSync(destDir, { recursive: true });
-    }
+  console.log(coloredSummary);
 
-    // Copy skill.md
-    var skillMd = path.join(srcDir, 'skill.md');
-    if (fs.existsSync(skillMd)) {
-      fs.copyFileSync(skillMd, path.join(destDir, 'skill.md'));
-      console.log(colorize('  Installed: ' + plugin.name + ' -> ' + destDir, 'green'));
-    }
+  if (result.success) {
+    console.log(colorize('[tackle-harness] Global settings updated: ~/.claude/settings.json', 'green'));
+    console.log(colorize('[tackle-harness] Done! Skills and hooks are globally available.', 'green'));
+    console.log('');
+    console.log(colorize('You can now use tackle-harness in any project directory.', 'cyan'));
+    console.log(colorize('Run "tackle-harness init" in your project to get started.', 'dim'));
   }
 
-  console.log('');
-  console.log(colorize('[tackle-harness] ' + globalPlugins.length + ' global skill(s) installed.', 'cyan'));
-  console.log(colorize('You can now use "初始化 tackle" in any project directory.', 'dim'));
+  process.exit(result.success ? 0 : 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -1106,6 +1588,9 @@ switch (command) {
     break;
   case 'init':
     cmdInit();
+    break;
+  case 'migrate':
+    cmdMigrate();
     break;
   case 'status':
     cmdStatus();

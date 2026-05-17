@@ -151,6 +151,12 @@
       "source": "skill-tackle-init",
       "enabled": true,
       "config": {}
+    },
+    {
+      "name": "skill-task-archive",
+      "source": "skill-task-archive",
+      "enabled": true,
+      "config": {}
     }
   ]
 }

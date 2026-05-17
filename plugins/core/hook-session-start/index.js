@@ -24,6 +24,9 @@ var path = require('path');
  * Walks up from the hook's location to find the tackle-harness package root.
  * Used to locate plugin-registry.json regardless of installation mode.
  *
+ * For global installs, resolves to the global npm package directory.
+ * For local installs, resolves to the project's node_modules/tackle-harness.
+ *
  * @returns {string}
  */
 function resolvePackageRoot() {
@@ -40,20 +43,37 @@ function resolvePackageRoot() {
     dir = parent;
   }
 
+  // Fallback: try to find global tackle-harness in node_modules
+  // Check common global npm directories
+  var globalPaths = [
+    path.join(process.env.APPDATA || '', 'npm', 'node_modules', 'tackle-harness'),
+    path.join(process.env.npm_config_prefix || '/usr/local', 'lib', 'node_modules', 'tackle-harness'),
+  ];
+
+  for (var j = 0; j < globalPaths.length; j++) {
+    if (fs.existsSync(path.join(globalPaths[j], 'plugins'))) {
+      return globalPaths[j];
+    }
+  }
+
   // Fallback to computed path
   return path.resolve(__dirname, '../../..');
 }
 
 /**
  * Walk up from a directory to find the project root (contains .claude/ or plugins/).
+ * Always uses process.cwd() for CWD-based project resolution.
  * @param {string} [startDir]
  * @returns {string}
  */
 function resolveProjectRoot(startDir) {
-  var dir = startDir || __dirname;
+  // Always use process.cwd() to find the actual project root
+  // This allows hooks to work correctly regardless of installation mode
+  var dir = startDir || process.cwd();
   for (var i = 0; i < 10; i++) {
     if (fs.existsSync(path.join(dir, '.claude'))) return dir;
-    if (fs.existsSync(path.join(dir, 'plugins'))) return dir;
+    if (fs.existsSync(path.join(dir, 'task.md'))) return dir;
+    if (fs.existsSync(path.join(dir, 'CLAUDE.md'))) return dir;
     var parent = path.dirname(dir);
     if (parent === dir) break;
     dir = parent;
@@ -157,11 +177,68 @@ function escapeForJson(s) {
     .replace(/\t/g, '\\t');
 }
 
+/**
+ * Check if this hook execution should be skipped to prevent double-triggering.
+ *
+ * Double-triggering can occur when:
+ * 1. A hook is registered globally (via global npm install)
+ * 2. The same hook is also registered at project level (via local build)
+ *
+ * We detect this by checking whether a marker file exists with a recent timestamp.
+ *
+ * @param {string} projectRoot - the project root directory
+ * @returns {boolean} true if this execution should be skipped
+ */
+function shouldSkipForDoubleTrigger(projectRoot) {
+  var markerPath = path.join(projectRoot, '.claude', '.hook-session-start-marker');
+
+  // If another hook process is marked as active, skip
+  if (fs.existsSync(markerPath)) {
+    try {
+      var marker = fs.readFileSync(markerPath, 'utf-8');
+      var markerData = JSON.parse(marker);
+
+      // If marker is recent (< 5 seconds), skip to prevent double execution
+      var now = Date.now();
+      if (markerData.timestamp && (now - markerData.timestamp) < 5000) {
+        return true;
+      }
+      // Stale marker — clean it up
+      try { fs.unlinkSync(markerPath); } catch (e) { /* ignore */ }
+    } catch (e) {
+      // Invalid marker, clean up
+      try { fs.unlinkSync(markerPath); } catch (e2) { /* ignore */ }
+    }
+  }
+
+  // Mark this hook as active
+  try {
+    fs.writeFileSync(
+      markerPath,
+      JSON.stringify({ timestamp: Date.now(), pid: process.pid }),
+      'utf-8'
+    );
+  } catch (e) {
+    // Failed to write marker, continue anyway
+  }
+
+  return false;
+}
+
 // --- Main ---
 (function main() {
   // Only run main if executed directly (not required as a module)
   if (require.main === module) {
     var packageRoot = resolvePackageRoot();
+    var projectRoot = resolveProjectRoot();
+
+    // Check for double-triggering prevention
+    if (shouldSkipForDoubleTrigger(projectRoot)) {
+      // Skip execution to prevent double-triggering, output empty result
+      process.stdout.write('{}\n');
+      process.exit(0);
+    }
+
     var context = buildContext(packageRoot);
 
     if (!context) {

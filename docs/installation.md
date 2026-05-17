@@ -240,7 +240,7 @@ npx tackle-harness validate
 
 ```
 === Validation Report ===
-Plugins checked: 21
+Plugins checked: 23
 Errors: 0
 Warnings: 0
 
@@ -420,6 +420,7 @@ Claude Code 设置文件，由 `tackle-harness init` 自动更新，包含：
 | completion-report | 汇报结果、完成报告 | 生成完成报告 |
 | experience-logger | 总结经验、记录经验 | 记录经验教训 |
 | tackle-init | 初始化 tackle、setup tackle | 项目初始化 |
+| task-archive | 任务归档、archive tasks | 归档已完成工作包 |
 
 ## 故障排除
 

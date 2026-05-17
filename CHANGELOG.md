@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.24] - 2026-05-17
+
+### Added
+
+- `skill-task-archive` 任务归档技能：将 task.md 中已完成的工作包归档到 `docs/archive/`，保持 task.md 精简（WP-052）
+
+### Changed
+
+- 插件总数从 21 更新为 23（Skill 从 13 增至 15），同步更新 README、CLAUDE.md 及全部文档中的引用
+
 ## [0.0.23] - 2026-05-09
 
 ### Changed
@@ -219,6 +229,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 插件注册表 (`plugin-registry.json`)
 - 运行时层：harness-build、plugin-loader、event-bus、state-store、config-manager、logger
 
+[0.0.24]: https://github.com/ph419/tackle/compare/v0.0.23...v0.0.24
 [0.0.23]: https://github.com/ph419/tackle/compare/v0.0.21...v0.0.23
 [0.0.21]: https://github.com/ph419/tackle/compare/v0.0.20...v0.0.21
 [0.0.20]: https://github.com/ph419/tackle/compare/v0.0.19...v0.0.20

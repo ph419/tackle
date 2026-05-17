@@ -162,7 +162,7 @@ production:
       node_modules/
         tackle-harness/           # 全局安装位置
           plugins/
-            core/                  # 21 个插件
+            core/                  # 23 个插件
           ...
 
 project-a/

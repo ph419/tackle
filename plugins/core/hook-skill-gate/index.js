@@ -38,6 +38,9 @@ var DEFAULT_CONFIG = {
  * Walks up from the hook's location to find the tackle-harness package root.
  * Used to locate plugin-registry.json regardless of installation mode.
  *
+ * For global installs, resolves to the global npm package directory.
+ * For local installs, resolves to the project's node_modules/tackle-harness.
+ *
  * @returns {string}
  */
 function resolvePackageRoot() {
@@ -54,18 +57,34 @@ function resolvePackageRoot() {
     dir = parent;
   }
 
+  // Fallback: try to find global tackle-harness in node_modules
+  // Check common global npm directories
+  var globalPaths = [
+    path.join(process.env.APPDATA || '', 'npm', 'node_modules', 'tackle-harness'),
+    path.join(process.env.npm_config_prefix || '/usr/local', 'lib', 'node_modules', 'tackle-harness'),
+  ];
+
+  for (var j = 0; j < globalPaths.length; j++) {
+    if (fs.existsSync(path.join(globalPaths[j], 'plugins'))) {
+      return globalPaths[j];
+    }
+  }
+
   // Fallback to computed path
   return path.resolve(__dirname, '../../..');
 }
 
 /**
- * Resolve the project root directory.
- * Walks up from a starting directory to find task.md or .claude/.
+ * Resolve the project root directory from CWD.
+ * Walks up from process.cwd() to find task.md or .claude/.
+ * This works for both global and local hook execution.
  *
  * @param {string} [startDir] - directory to start from (default: process.cwd())
  * @returns {string}
  */
 function resolveProjectRoot(startDir) {
+  // Always use process.cwd() to find the actual project root
+  // This allows hooks to work correctly regardless of installation mode
   var dir = startDir || process.cwd();
   for (var i = 0; i < 10; i++) {
     if (fs.existsSync(path.join(dir, 'task.md'))) return dir;
@@ -107,6 +126,7 @@ function discoverGatedSkills(packageRoot, hookConfig) {
 
       // Attempt to read the plugin's plugin.json for metadata
       // Path: plugins/core/{source}/plugin.json
+      // BUGFIX: Use entry.source directly (already includes 'hook-' prefix if needed)
       var pluginJsonPath = path.join(
         packageRoot,
         'plugins',
@@ -187,6 +207,9 @@ class SkillGateHook extends HookPlugin {
     this._packageRoot = resolvePackageRoot();
     var stateFilePath = path.join(this._projectRoot, '.claude-state');
     this._store = new StateStore({ filePath: stateFilePath });
+
+    // Load project-level config from harness-config.yaml
+    this._loadProjectConfig();
 
     // Merge context config if available
     if (context && context.config) {
@@ -363,6 +386,188 @@ class SkillGateHook extends HookPlugin {
     if (!this._store) return;
     await this._store.set(this._config.stateKey, value);
   }
+
+  /**
+   * Load project-level config from harness-config.yaml.
+   * Reads CWD/.claude/config/harness-config.yaml and merges hook-skill-gate section.
+   */
+  _loadProjectConfig() {
+    var configPath = path.join(this._projectRoot, '.claude', 'config', 'harness-config.yaml');
+    try {
+      if (fs.existsSync(configPath)) {
+        var content = fs.readFileSync(configPath, 'utf-8');
+        var yamlConfig = this._parseSimpleYaml(content);
+
+        // Extract hook-skill-gate specific config
+        if (yamlConfig['hook-skill-gate']) {
+          var hookConfig = yamlConfig['hook-skill-gate'];
+          for (var key in hookConfig) {
+            if (hookConfig.hasOwnProperty(key)) {
+              this._config[key] = hookConfig[key];
+            }
+          }
+        }
+      }
+    } catch (e) {
+      // Config file doesn't exist or is invalid - use defaults
+    }
+  }
+
+  /**
+   * Minimal YAML-like parser for simple key-value YAML files.
+   * Handles nested structure via indentation (spaces only).
+   * This is NOT a full YAML parser - it covers the subset used by harness-config.yaml.
+   * @param {string} content
+   * @returns {object}
+   */
+  _parseSimpleYaml(content) {
+    var result = {};
+    var lines = content.split('\n');
+    var stack = [{ obj: result, indent: -1 }];
+
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+
+      // Skip empty lines, comments, and document separators
+      if (!line.trim() || line.trim().indexOf('#') === 0 || line.trim() === '---') {
+        continue;
+      }
+
+      // Calculate indentation
+      var indent = line.search(/\S/);
+      if (indent < 0) continue;
+
+      // Pop stack to find parent
+      while (stack.length > 1 && stack[stack.length - 1].indent >= indent) {
+        stack.pop();
+      }
+
+      var parent = stack[stack.length - 1].obj;
+      var trimmed = line.trim();
+
+      // Check if it's a list item
+      if (trimmed.indexOf('- ') === 0) {
+        if (!Array.isArray(parent)) continue;
+        var itemValue = this._parseYamlValue(trimmed.substring(2));
+        parent.push(itemValue);
+        continue;
+      }
+
+      // Key-value pair: split on first colon only
+      var colonIdx = trimmed.indexOf(':');
+      if (colonIdx === -1) continue;
+
+      var key = trimmed.substring(0, colonIdx).trim();
+      var valuePart = trimmed.substring(colonIdx + 1).trim();
+
+      // Handle inline comments (only outside quoted strings)
+      if (valuePart && valuePart.indexOf('#') > -1) {
+        var inQuote = false;
+        var quoteChar = '';
+        var commentIdx = -1;
+        for (var ci = 0; ci < valuePart.length; ci++) {
+          var ch = valuePart.charAt(ci);
+          if (!inQuote && (ch === '"' || ch === "'")) {
+            inQuote = true;
+            quoteChar = ch;
+          } else if (inQuote && ch === quoteChar) {
+            inQuote = false;
+          } else if (!inQuote && ch === '#') {
+            commentIdx = ci;
+            break;
+          }
+        }
+        if (commentIdx > -1) {
+          valuePart = valuePart.substring(0, commentIdx).trim();
+        }
+      }
+
+      if (valuePart === '' || valuePart === null) {
+        // Nested object
+        var child = {};
+        parent[key] = child;
+        stack.push({ obj: child, indent: indent });
+      } else {
+        parent[key] = this._parseYamlValue(valuePart);
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Parse a YAML scalar value.
+   * @param {*} val
+   * @returns {*}
+   */
+  _parseYamlValue(val) {
+    if (val === null || val === undefined) return val;
+    if (typeof val !== 'string') return val;
+    if (val === 'true') return true;
+    if (val === 'false') return false;
+    if (val === 'null' || val === '~') return null;
+
+    // Remove surrounding quotes
+    if ((val.charAt(0) === '"' && val.charAt(val.length - 1) === '"') ||
+        (val.charAt(0) === "'" && val.charAt(val.length - 1) === "'")) {
+      return val.substring(1, val.length - 1);
+    }
+
+    // Try number
+    var num = Number(val);
+    if (!isNaN(num) && val !== '') return num;
+
+    return val;
+  }
+
+  /**
+   * Check if this hook execution should be skipped to prevent double-triggering.
+   *
+   * Double-triggering can occur when:
+   * 1. A hook is registered globally (via global npm install)
+   * 2. The same hook is also registered at project level (via local build)
+   *
+   * We detect this by checking:
+   * - Whether HOOK_EXECUTION_ID env var is set (set by first execution)
+   * - Whether a marker file exists in the project
+   *
+   * @returns {boolean} true if this execution should be skipped
+   */
+  _shouldSkipForDoubleTrigger() {
+    var markerPath = path.join(this._projectRoot, '.claude', '.hook-execution-marker');
+
+    // If another hook process is marked as active, skip
+    if (fs.existsSync(markerPath)) {
+      try {
+        var marker = fs.readFileSync(markerPath, 'utf-8');
+        var markerData = JSON.parse(marker);
+
+        // If marker is recent (< 5 seconds), skip to prevent double execution
+        var now = Date.now();
+        if (markerData.timestamp && (now - markerData.timestamp) < 5000) {
+          return true;
+        }
+        // Stale marker — clean it up
+        try { fs.unlinkSync(markerPath); } catch (e) { /* ignore */ }
+      } catch (e) {
+        // Invalid marker, clean up
+        try { fs.unlinkSync(markerPath); } catch (e2) { /* ignore */ }
+      }
+    }
+
+    // Mark this hook as active
+    try {
+      fs.writeFileSync(
+        markerPath,
+        JSON.stringify({ timestamp: Date.now(), pid: process.pid }),
+        'utf-8'
+      );
+    } catch (e) {
+      // Failed to write marker, continue anyway
+    }
+
+    return false;
+  }
 }
 
 // --- CLI Entry Point ---
@@ -479,6 +684,13 @@ function main() {
     hook
       .onActivate(null)
       .then(function () {
+        // Check for double-triggering prevention
+        if (hook._shouldSkipForDoubleTrigger()) {
+          // Skip execution to prevent double-triggering
+          process.stdout.write(JSON.stringify({ allowed: true, skipped: true, reason: 'Double-trigger prevention' }) + '\n');
+          process.exit(0);
+        }
+
         // Set the event type based on CLI mode
         if (mode === '--pre-tool') {
           context.event = 'PreToolUse';

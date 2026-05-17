@@ -3,7 +3,7 @@
 > A plugin-based AI Agent workflow framework that provides task management, workflow orchestration, and role management for Claude Code
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-0.0.17-blue.svg)](https://github.com/ph419/tackle)
+[![Version](https://img.shields.io/badge/version-0.0.24-blue.svg)](https://github.com/ph419/tackle)
 
 **[中文文档](README.md)**
 
@@ -43,9 +43,21 @@ flowchart LR
 
 ## Installation
 
+**Recommended: Global Install**
+
+```bash
+npm install -g tackle-harness
+```
+
+After global install, use the `tackle-harness` command in any project without repeated installs.
+
+**Alternative: Local Install**
+
 ```bash
 npm install tackle-harness
 ```
+
+Local install requires `npx tackle-harness` or adding to package.json scripts.
 
 ## Quick Start
 
@@ -53,94 +65,50 @@ npm install tackle-harness
 # Navigate to your project directory
 cd your-project
 
-# One-command initialization (build skills + register hooks + create config directories)
-npx tackle-harness init
+# One-command initialization (create config dirs + register hooks)
+tackle-harness init
 
-# Or step by step
-npx tackle-harness build      # Build skills to .claude/skills/, merge hooks into settings.json
-npx tackle-harness validate   # Validate plugin integrity
+# Migrate from previous local install
+tackle-harness migrate
+
+# Manual config update (when .claude/settings.json changes)
+tackle-harness build
 ```
+
+> **Note**: With global install, skills and hooks are managed by npm globally. Your project only needs config files (`.claude/config/` and `.claude/settings.json`).
 
 ## Use Cases
 
-### Case 1: New Feature Development
+- **New feature development** — Requirements analysis → work package split → parallel development → quality check
+- **Batch bug fixes** — Dependency analysis → parallel fixes → auto verification
+- **System refactoring** — Architecture analysis → batch execution → experience retention
+- **Code review** — Quality check → doc sync → experience logging
+- **Project wrap-up** — Progress summary → experience retention → completion report
 
-**Your situation**: Adding a "Team Collaboration" module to a SaaS product, involving frontend UI, backend API, and database changes.
-
-**Just say**:
-```
-Start workflow, implement team collaboration module, including:
-- Team creation and management pages
-- Member invitation and permission APIs
-- Database table design
-```
-
-**What Tackle Harness does**:
-1. Analyzes requirement complexity, splits into 4 work packages (frontend, backend, database, integration testing)
-2. Outputs implementation plans for each work package, pauses for your review
-3. After your approval, dispatches multiple agents to develop modules in parallel
-4. Automatically runs code checks and test verification
-5. Generates a completion report and asks for next steps
-
-**Skills involved**: workflow-orchestrator → split-work-package → human-checkpoint → agent-dispatcher → checklist → completion-report
-
-### Case 2: Batch Bug Fixes
-
-**Your situation**: A backlog of 5 bugs before the sprint ends, want to handle them in parallel and wrap up quickly.
-
-**Just say**:
-```
-Batch execute WP-015 through WP-019, fix these 5 bugs in parallel
-```
-
-**What Tackle Harness does**:
-1. Analyzes dependencies between the 5 bugs (check for overlapping file changes)
-2. Assigns conflict-free bugs to different agents for simultaneous fixes
-3. Queues dependent bugs sequentially, auto-starting the next after each completes
-4. Runs a checklist after all fixes to confirm no new issues introduced
-
-**Skills involved**: agent-dispatcher → checklist → completion-report
-
-### Case 3: System Refactoring
-
-**Your situation**: Need to refactor a monolithic application into microservices, involving coordinated changes across multiple modules, worried about breaking things.
-
-**Just say**:
-```
-Split work package, extract the user module from the monolith into an independent service
-```
-
-**What Tackle Harness does**:
-1. Deep analysis of code structure, identifies all modules and dependencies that need changes
-2. Generates a detailed refactoring plan (interface extraction, data migration, routing adjustments, etc.)
-3. Pauses for your review of the architecture proposal (critical decision point)
-4. Executes refactoring in dependency-ordered batches, auto-verifying after each batch
-5. Records refactoring experience for future similar extraction tasks
-
-**Skills involved**: split-work-package → human-checkpoint → agent-dispatcher → checklist → experience-logger → completion-report
+> For full scenario flowcharts and step-by-step guides, see [Daily Workflow Best Practices](docs/daily-workflow-guide.md)
 
 ## Command Reference
 
 | Command | Description |
 |---------|-------------|
-| `npx tackle-harness` | Default: runs build |
-| `npx tackle-harness build` | Build all skills, update .claude/settings.json |
-| `npx tackle-harness validate` | Validate plugin format |
-| `npx tackle-harness validate-config` | Validate harness-config.yaml |
-| `npx tackle-harness init` | First-time setup: build + create .claude/ directories |
-| `npx tackle-harness interactive` | Interactive plugin management (alias: `i`) |
-| `npx tackle-harness status` | Show build status and plugin statistics |
-| `npx tackle-harness config` | Show/validate current configuration |
-| `npx tackle-harness list` | List all registered plugins |
-| `npx tackle-harness version` | Show version information |
-| `npx tackle-harness help` | Show help message |
-| `npx tackle-harness --root <path>` | Specify target project path (default: current directory) |
-| `npx tackle-harness --help` | Show help message |
-| `npx tackle-harness --version, -v` | Show version information |
+| `tackle-harness` | Default: runs build |
+| `tackle-harness build` | Update .claude/settings.json, register global skills and hooks |
+| `tackle-harness validate` | Validate plugin format |
+| `tackle-harness validate-config` | Validate harness-config.yaml |
+| `tackle-harness init` | First-time setup: create config dirs and register hooks |
+| `tackle-harness migrate` | Migrate from local install: remove local skills/hooks dirs, update config |
+| `tackle-harness interactive` | Interactive plugin management (alias: `i`) |
+| `tackle-harness status` | Show build status and plugin statistics |
+| `tackle-harness config` | Show/validate current configuration |
+| `tackle-harness list` | List all registered plugins |
+| `tackle-harness version` | Show version information |
+| `tackle-harness --root <path>` | Specify target project path (default: current directory) |
+
+> **Local install note**: If using `npm install tackle-harness` (non-global), prefix commands with `npx`, e.g. `npx tackle-harness init`.
 
 ## Skills Reference
 
-| Skill | Trigger (CN / EN) | Function |
+| Skill | Trigger | Function |
 |-------|---------|----------|
 | task-creator | "创建任务" / "create task" | Create a single task in the task list |
 | batch-task-creator | "批量创建任务" / "batch create tasks" | Batch create multiple tasks |
@@ -152,9 +120,11 @@ Split work package, extract the user module from the monolith into an independen
 | checklist | "运行检查" / "run checklist" | Execute checklists |
 | completion-report | "完成报告" / "completion report" | Generate completion report |
 | experience-logger | "总结经验" / "log experience" | Record project lessons learned |
+| watchdog-manager | "启动守护进程" / "start watchdog" | Start and manage background watchdog daemons |
 | agent-dispatcher | "批量执行" / "dispatch agents" | Dispatch multiple sub-agents in parallel |
 | workflow-orchestrator | "开始工作流" / "start workflow" | Orchestrate complete workflows |
-| watchdog-manager | "启动守护进程" / "start watchdog" | Start and manage background watchdog daemons |
+| tackle-init | "初始化 tackle" / "setup tackle" | Initialize Tackle Harness in a project |
+| task-archive | "任务归档" / "archive tasks" | Archive completed work packages |
 
 ## Workflow Overview
 
@@ -176,11 +146,11 @@ Requirement → Plan(P0) → Review(P1) → Execute(P2) → Verify(P3) → Repor
 
 ## Plugin Architecture
 
-Tackle Harness contains 4 plugin types, 21 plugins total:
+Tackle Harness contains 4 plugin types, 23 plugins total:
 
 | Type | Count | Purpose |
 |------|-------|---------|
-| Skill | 13 | Executable skills, directly callable by Claude Code |
+| Skill | 15 | Executable skills, directly callable by Claude Code |
 | Provider | 4 | State store, role registry, memory store, watchdog |
 | Hook | 2 | Skill gate + session-start plan-mode rule injection |
 | Validator | 2 | Document sync validation, work package validation |
@@ -189,25 +159,30 @@ Tackle Harness contains 4 plugin types, 21 plugins total:
 
 ## Build Output Structure
 
-After running `tackle-harness build`, the following is generated in your project:
+### Global Install Mode (Recommended)
+
+After running `tackle-harness init`, the following is generated in your project:
 
 ```
 your-project/
   .claude/
-    skills/                          # 13 skills
+    config/
+      harness-config.yaml            # Config file (optional)
+    settings.json                    # Auto-registered hooks
+```
+
+Skills and hooks are managed by the global install — no local `skills/` or `hooks/` directories needed.
+
+### Local Install Mode (Alternative)
+
+If using `npm install tackle-harness` (non-global), `tackle-harness build` generates:
+
+```
+your-project/
+  .claude/
+    skills/                          # 15 skills
       skill-task-creator/skill.md
-      skill-batch-task-creator/skill.md
-      skill-split-work-package/skill.md
-      skill-progress-tracker/skill.md
-      skill-team-cleanup/skill.md
-      skill-human-checkpoint/skill.md
-      skill-role-manager/skill.md
-      skill-checklist/skill.md
-      skill-completion-report/skill.md
-      skill-experience-logger/skill.md
-      skill-watchdog-manager/skill.md
-      skill-agent-dispatcher/skill.md
-      skill-workflow-orchestrator/skill.md
+      ...
     hooks/                           # 2 hooks
       hook-skill-gate/index.js
       hook-session-start/index.js
@@ -218,44 +193,76 @@ your-project/
 
 ### Skills not working after installation?
 
-Make sure you ran `npx tackle-harness build` in your project root, and that `.claude/skills/` contains 13 skill folders.
+**Global install mode**:
+1. Verify global install: `npm list -g tackle-harness`
+2. Run `tackle-harness init` to initialize the project
+3. Check `.claude/settings.json` contains tackle-harness hooks
+
+**Local install mode**:
+1. Verify you ran `npx tackle-harness build` in the project root
+2. Check `.claude/skills/` contains skill folders
 
 ### Can multiple projects share an installation?
 
-Each project installs and builds independently. Different projects can use different versions.
+After global install, all projects share the same skills and hooks. Each project only needs its own config files (`.claude/config/` and `.claude/settings.json`).
 
-### Global installation
+### How to migrate from a previous version?
+
+If previously using local install, migrate to global install:
 
 ```bash
+# 1. Install globally
 npm install -g tackle-harness
-tackle-harness build
+
+# 2. Navigate to project directory
+cd your-project
+
+# 3. Run migration command
+tackle-harness migrate
 ```
 
-After global installation, use the `tackle-harness` command directly without `npx`.
+The migration command will:
+- Remove local `.claude/skills/` and `.claude/hooks/` directories
+- Update `.claude/settings.json` to point to global paths
+- Preserve your config files (`harness-config.yaml`)
+
+### Windows path issues?
+
+Global install supports Windows paths (e.g. `D:\path\to\project`) — forward or backslashes both work:
+
+```bash
+tackle-harness build --root D:/path/to/project
+tackle-harness build --root D:\path\to\project
+```
 
 ### How to uninstall?
 
 ```bash
+# Uninstall global install
+npm uninstall -g tackle-harness
+
+# Uninstall local install
 npm uninstall tackle-harness
 ```
 
-Skill files remain in `.claude/skills/`. Delete manually if needed.
+Config files remain in `.claude/` — delete manually if needed.
 
 ### What are the hooks in settings.json?
 
 `tackle-harness build` automatically injects three hooks into `.claude/settings.json`:
-- `SessionStart` — On session startup, scans plan-mode skills and injects priority rules into system-reminder, ensuring task-creation skills enforce Plan mode
-- `PreToolUse(Edit|Write)` — Blocks file edits under certain states
-- `PostToolUse(Skill)` — Updates state after skill calls
 
-These hooks point to scripts in `node_modules/tackle-harness/` and won't affect other configurations in your project. Existing settings.json content is preserved; only tackle-harness-related hooks are appended.
+- **SessionStart** — On session startup, scans plan-mode skills and injects priority rules into system-reminder
+- **PreToolUse(Edit|Write)** — Blocks file edits under certain states
+- **PostToolUse(Skill)** — Updates state after skill calls
+
+These hooks point to the global install path or `node_modules/tackle-harness/` scripts. Existing settings.json content is preserved; only tackle-harness hooks are appended.
 
 ### How to use interactive mode?
 
 ```bash
-npx tackle-harness interactive
+tackle-harness interactive
 # or use alias
-npx tackle-harness i
+tackle-harness i
 ```
 
 Interactive mode provides a visual plugin management interface:
@@ -264,15 +271,24 @@ Interactive mode provides a visual plugin management interface:
 - View plugin dependencies
 - Run plugin validation
 
+> In local install mode, use `npx tackle-harness interactive`.
+
 ### CI/CD Integration
 
 Using Tackle Harness in CI environments:
 
 ```yaml
+# Method 1: Global install (recommended)
+- name: Setup Tackle Harness
+  run: |
+    npm install -g tackle-harness
+    tackle-harness init --root $GITHUB_WORKSPACE
+
+# Method 2: Local install
 - name: Setup Tackle Harness
   run: |
     npm install tackle-harness
-    npx tackle-harness build --root $GITHUB_WORKSPACE
+    npx tackle-harness init --root $GITHUB_WORKSPACE
 ```
 
 The project includes GitHub Actions workflows that automatically run tests on PRs and pushes.

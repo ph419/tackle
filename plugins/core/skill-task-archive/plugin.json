@@ -1,0 +1,10 @@
+{
+  "name": "skill-task-archive",
+  "version": "1.0.0",
+  "type": "skill",
+  "description": "Archive completed work packages from task.md to docs/archive/, keeping only pending items. Use when user says '任务归档' or 'archive tasks'.",
+  "triggers": ["任务归档", "task archive", "archive tasks", "归档"],
+  "dependencies": [],
+  "provides": ["skill:task-archive"],
+  "config": {}
+}

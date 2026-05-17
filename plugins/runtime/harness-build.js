@@ -42,6 +42,8 @@ var VALID_PLUGIN_TYPES = ['skill', 'hook', 'validator', 'provider'];
  * @param {string} [options.outputSkillsDir] - override output .claude/skills/
  * @param {string} [options.outputHooksDir]  - override output .claude/hooks/
  * @param {boolean} [options.verbose]       - enable verbose logging
+ * @param {boolean} [options.globalMode]    - global install mode (use default context config)
+ * @param {string} [options.cliPath]        - absolute path to CLI binary for __TACKLE_CLI_PATH__ replacement
  */
 function HarnessBuild(options) {
   options = options || {};
@@ -54,6 +56,8 @@ function HarnessBuild(options) {
   this._outputSkillsDir = options.outputSkillsDir || path.join(this._targetRoot, '.claude', 'skills');
   this._outputHooksDir = options.outputHooksDir || path.join(this._targetRoot, '.claude', 'hooks');
   this._verbose = options.verbose || false;
+  this._globalMode = options.globalMode || false;
+  this._cliPath = options.cliPath || null;
 
   // Legacy alias for backward compatibility
   this._rootDir = this._targetRoot;
@@ -479,6 +483,12 @@ HarnessBuild.prototype._buildSkillPlugin = function _buildSkillPlugin(name, plug
     var targetPath = '.claude/skills/' + name + '/';
     content = content.split(sourcePath).join(targetPath);
 
+    // Replace __TACKLE_CLI_PATH__ placeholder with actual CLI path
+    if (this._cliPath) {
+      var cliPath = this._cliPath.replace(/\\/g, '/'); // Normalize to forward slashes
+      content = content.split('__TACKLE_CLI_PATH__').join(cliPath);
+    }
+
     // If the skill.md has a front-matter header, keep it.
     // If not, generate one from plugin.json metadata.
     if (!this._hasFrontMatter(content)) {
@@ -606,6 +616,7 @@ HarnessBuild.prototype._buildProviderPlugin = function _buildProviderPlugin(name
 
 /**
  * Format build summary for output.
+ * Enhanced with installation path and global mode indicator.
  *
  * @param {object[]} results
  * @param {object[]} errors
@@ -632,6 +643,18 @@ HarnessBuild.prototype._formatBuildSummary = function _formatBuildSummary(result
       case 'provider': providerCount++; break;
     }
   }
+
+  // Show installation mode
+  if (this._globalMode) {
+    lines.push('Installation: Global (home directory)');
+  } else {
+    lines.push('Installation: Project (local)');
+  }
+
+  // Show output paths
+  lines.push('Skills output: ' + this._outputSkillsDir);
+  lines.push('Hooks output:  ' + this._outputHooksDir);
+  lines.push('');
 
   lines.push('Plugins built: ' + results.length);
   lines.push('  Skills:     ' + skillCount);
@@ -1111,38 +1134,56 @@ function _serializeConfigValue(val) {
  * Inject context window configuration into a skill.md file.
  * Inserts a <!-- CONTEXT-CONFIG --> block after front matter.
  *
+ * In global mode, uses default context config instead of reading from project config.
+ *
  * @param {string} content - the skill.md content
  * @param {string} pluginName - the plugin name for per-plugin overrides
  * @returns {string} content with injected config block
  */
 HarnessBuild.prototype._injectContextConfig = function _injectContextConfig(content, pluginName) {
-  var config = this._readHarnessConfig();
-  if (!config || Object.keys(config).length === 0) {
-    return content; // No config, skip injection
-  }
-
-  // Determine which config section to inject based on plugin name
   var relevantConfig = null;
   var configBlockName = '';
 
-  if ((pluginName === 'skill-agent-dispatcher' || pluginName === 'agent-dispatcher') && config.agent_dispatcher) {
-    relevantConfig = config.agent_dispatcher;
-    configBlockName = 'AGENT-DISPATCHER-CONFIG';
-  } else if (config.context_window) {
-    relevantConfig = config.context_window;
+  if (this._globalMode) {
+    // Global mode: use default context config
+    relevantConfig = {
+      enabled: true,
+      chunk_size: 120000,
+      overlap: 2000,
+      thresholds: {
+        small: 50000,
+        medium: 150000,
+        large: 300000
+      }
+    };
     configBlockName = 'CONTEXT-CONFIG';
-  }
+  } else {
+    // Project mode: read from harness config
+    var config = this._readHarnessConfig();
+    if (!config || Object.keys(config).length === 0) {
+      return content; // No config, skip injection
+    }
 
-  if (!relevantConfig || Object.keys(relevantConfig).length === 0) {
-    return content;
-  }
+    // Determine which config section to inject based on plugin name
+    if ((pluginName === 'skill-agent-dispatcher' || pluginName === 'agent-dispatcher') && config.agent_dispatcher) {
+      relevantConfig = config.agent_dispatcher;
+      configBlockName = 'AGENT-DISPATCHER-CONFIG';
+    } else if (config.context_window) {
+      relevantConfig = config.context_window;
+      configBlockName = 'CONTEXT-CONFIG';
+    }
 
-  // Apply per-plugin override if exists (only for context_window)
-  if (config.overrides && config.overrides[pluginName] && relevantConfig === config.context_window) {
-    var override = config.overrides[pluginName];
-    for (var k in override) {
-      if (override.hasOwnProperty(k)) {
-        relevantConfig[k] = override[k];
+    if (!relevantConfig || Object.keys(relevantConfig).length === 0) {
+      return content;
+    }
+
+    // Apply per-plugin override if exists (only for context_window)
+    if (config.overrides && config.overrides[pluginName] && relevantConfig === config.context_window) {
+      var override = config.overrides[pluginName];
+      for (var k in override) {
+        if (override.hasOwnProperty(k)) {
+          relevantConfig[k] = override[k];
+        }
       }
     }
   }
