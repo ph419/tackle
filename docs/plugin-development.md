@@ -2,7 +2,7 @@
 
 本指南介绍如何为 Tackle Harness 开发自定义插件。Tackle Harness 是一个基于插件的 AI Agent 工作流框架，支持四种插件类型：Skill、Hook、Validator 和 Provider。
 
-> **当前版本 (v0.0.24) 插件统计**：15 个 Skill、2 个 Hook、2 个 Validator、4 个 Provider，共 23 个插件。详见 `plugins/plugin-registry.json`。
+> **当前版本 (v0.1.2) 插件统计**：15 个 Skill、2 个 Hook、2 个 Validator、4 个 Provider，共 23 个插件。详见 `plugins/plugin-registry.json`。
 
 ## 目录
 

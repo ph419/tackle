@@ -3,7 +3,7 @@
 > 基于插件的 AI Agent 工作流框架，为 Claude Code 提供任务管理、工作流编排、角色管理等能力
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-0.1.1-blue.svg)](https://github.com/ph419/tackle)
+[![Version](https://img.shields.io/badge/version-0.1.2-blue.svg)](https://github.com/ph419/tackle)
 
 **[English](README.en.md)**
 
@@ -182,7 +182,7 @@ your-project/
 ```
 your-project/
   .claude/
-    skills/                          # 13 个技能
+    skills/                          # 15 个技能
       skill-task-creator/skill.md
       ...
     hooks/                           # 2 个 hook
@@ -274,12 +274,6 @@ tackle-harness i
 - 执行插件验证
 
 > 本地安装模式下请使用 `npx tackle-harness interactive`。
-
-交互式模式提供可视化的插件管理界面，支持：
-- 查看所有已注册插件的状态
-- 启用/停用插件
-- 查看插件依赖关系
-- 执行插件验证
 
 ### CI/CD 如何集成？
 

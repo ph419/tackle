@@ -284,13 +284,79 @@ loop_interval = 30  # 秒
 max_wait_time = 7200  # 2 小时
 shutdown_timeout = 15  # 等待 Teamee shutdown 响应的超时
 
-# 初始化守护进程相关状态
-loop_iteration = 0
-processed_action_ids = []  # 跟踪已处理的守护进程指令
+# ---- 状态持久化初始化 (防上下文压缩丢失) ----
+state_file = ".claude-daemon/dispatcher-state.json"
 
-start_time = now()
+# 检查是否存在已有状态文件（上下文压缩后恢复）
+if file_exists(state_file):
+    try:
+        existing_state = json_loads(Read(file_path=state_file))
+    except Exception as e:
+        print(f"⚠️ 状态文件解析失败，使用默认初始状态: {e}")
+        existing_state = {}
+    if existing_state.get("status") == "monitoring":
+        # 从文件恢复状态（上下文压缩后重新进入时走此分支）
+        team_name = existing_state["team_name"]
+        teamee_map = existing_state["teamee_map"]
+        wp_assignments = existing_state["wp_assignments"]
+        loop_iteration = existing_state["loop_iteration"]
+        start_time = parse_iso8601(existing_state["start_time"])
+        processed_action_ids = existing_state["processed_action_ids"]
+        max_batch_size = existing_state.get("max_batch_size", 5)
+        current_batch = existing_state.get("current_batch", [])
+        pending_batches = existing_state.get("pending_batches", [])
+        print(f"从状态文件恢复: {len(teamee_map)} 个活跃 Teamee, 迭代 {loop_iteration}")
+    else:
+        # 状态文件存在但已完成，正常初始化
+        pass
+
+# 首次初始化守护进程相关状态
+loop_iteration = loop_iteration if 'loop_iteration' in locals() else 0
+processed_action_ids = processed_action_ids if 'processed_action_ids' in locals() else []
+
+# ---- 批量大小控制参数 ----
+max_batch_size = get_config("agent_dispatcher.max_batch_size", default=5)
+pending_batches = pending_batches if 'pending_batches' in locals() else []
+
+# 首次写入状态文件
+initial_state = {
+    "team_name": "{team_name}",
+    "teamee_map": teamee_map if 'teamee_map' in locals() else {},
+    "wp_assignments": wp_assignments if 'wp_assignments' in locals() else {},
+    "start_time": now_iso8601(),
+    "loop_iteration": loop_iteration,
+    "processed_action_ids": processed_action_ids,
+    "total_tasks": len(tasks) if 'tasks' in locals() else 0,
+    "status": "monitoring",
+    "max_batch_size": max_batch_size,
+    "current_batch": [],
+    "pending_batches": pending_batches,
+    "global_pause_flag": False
+}
+Write(file_path=state_file, content=json_dumps(initial_state))
+
+start_time = start_time if 'start_time' in locals() else now()
 while (now() - start_time) < max_wait_time:
     loop_iteration += 1
+
+    # ---- Phase 0: 从状态文件恢复关键变量 (防上下文压缩) ----
+    if file_exists(state_file):
+        try:
+            state = json_loads(Read(file_path=state_file))
+        except Exception as e:
+            print(f"⚠️ 状态文件解析失败，使用当前内存状态继续: {e}")
+            state = {}
+        team_name = state.get("team_name", team_name)
+        teamee_map = state.get("teamee_map", teamee_map)
+        wp_assignments = state.get("wp_assignments", wp_assignments)
+        start_time = parse_iso8601(state["start_time"]) if state.get("start_time") else start_time
+        loop_iteration = state.get("loop_iteration", loop_iteration)
+        processed_action_ids = state.get("processed_action_ids", processed_action_ids)
+        max_batch_size = state.get("max_batch_size", max_batch_size)
+        current_batch = state.get("current_batch", current_batch)
+        pending_batches = state.get("pending_batches", pending_batches)
+        global_pause_flag = state.get("global_pause_flag", False)
+
     # ---- Phase A: 获取任务状态 ----
     tasks = TaskList()
 
@@ -331,17 +397,51 @@ while (now() - start_time) < max_wait_time:
             # Teamee 完成后更新对应的 task-{id}.json 文件
             update_task_file(task.id, status="completed")
 
+    # ---- Phase B.5: 状态持久化写回 (teamee_map 变更) ----
+    Write(file_path=state_file, content=json_dumps({
+        "team_name": team_name,
+        "teamee_map": teamee_map,
+        "wp_assignments": wp_assignments,
+        "start_time": start_time.isoformat() if hasattr(start_time, 'isoformat') else start_time,
+        "loop_iteration": loop_iteration,
+        "processed_action_ids": processed_action_ids,
+        "total_tasks": len(tasks),
+        "status": "monitoring",
+        "max_batch_size": max_batch_size,
+        "current_batch": current_batch,
+        "pending_batches": pending_batches,
+        "global_pause_flag": global_pause_flag
+    }))
+
     # ---- Phase C: 按需创建 Teamee 处理 newly-unblocked 任务 ----
     # C0. 读取并发配置，计算当前时段的并发上限
     concurrency_config = get_config("agent_dispatcher.concurrency")
     max_concurrent = get_max_concurrent(concurrency_config, now())
     active_count = len(teamee_map)
 
+    # ---- C0.2 批量大小控制 ----
+    # 收集本轮可创建的 unblocked 任务，按 max_batch_size 分批
+    unblocked_candidates = sorted([t for t in tasks if t.status == "pending" and t.owner == "" and is_unblocked(t) and t.id not in teamee_map], key=lambda t: t.id)
+    # 如果当前批次有活跃任务，不创建新批次（等当前批次完成）
+    current_batch_active = any(tid in teamee_map for tid in current_batch) if current_batch else False
+
+    if unblocked_candidates and not current_batch_active:
+        # 取前 max_batch_size 个作为当前批次
+        current_batch = [t.id for t in unblocked_candidates[:max_batch_size]]
+        overflow = unblocked_candidates[max_batch_size:]
+        if overflow:
+            pending_batches.extend([t.id for t in overflow])
+            print(f"批量控制: 当前批次 {len(current_batch)} 个任务, 待处理批次 {len(pending_batches)} 个任务")
+
     for task in tasks:
         if task.status == "pending" and task.owner == "" and is_unblocked(task):
             # C0.1 并发检查：活跃 Teamee 数已达上限，跳过创建
             if active_count >= max_concurrent:
                 log(f"并发上限 {max_concurrent} 已达，任务 {task.id} 保持 pending")
+                continue
+
+            # C0.3 批量控制：只处理当前批次内的任务
+            if current_batch and task.id not in current_batch:
                 continue
 
             # C1. 检查是否已有映射（防止重复创建）
@@ -384,12 +484,32 @@ while (now() - start_time) < max_wait_time:
                 complexity_score=assignment.complexity_score
             )
 
+    # ---- Phase C.5: 状态持久化写回 (teamee_map 变更) ----
+    Write(file_path=state_file, content=json_dumps({
+        "team_name": team_name,
+        "teamee_map": teamee_map,
+        "wp_assignments": wp_assignments,
+        "start_time": start_time.isoformat() if hasattr(start_time, 'isoformat') else start_time,
+        "loop_iteration": loop_iteration,
+        "processed_action_ids": processed_action_ids,
+        "total_tasks": len(tasks),
+        "status": "monitoring",
+        "max_batch_size": max_batch_size,
+        "current_batch": current_batch,
+        "pending_batches": pending_batches,
+        "global_pause_flag": global_pause_flag
+    }))
+
     # ---- Phase D.1: 读取守护进程指令 (DISP-003) ----
     # 在判断退出条件前，读取守护进程下发的指令
     daemon_actions_path = ".claude-daemon/daemon-actions.json"
     if file_exists(daemon_actions_path):
         actions_data = Read(file_path=daemon_actions_path)
-        actions = json_loads(actions_data).get("actions", [])
+        try:
+            actions = json_loads(actions_data).get("actions", [])
+        except Exception as e:
+            print(f"⚠️ 守护进程指令文件解析失败，跳过本轮指令: {e}")
+            actions = []
 
         for action in actions:
             # 检查指令是否已被处理
@@ -491,6 +611,22 @@ while (now() - start_time) < max_wait_time:
                 "last_processed_iteration": loop_iteration
             }))
 
+    # ---- Phase D.5: 状态持久化写回 (processed_action_ids 变更) ----
+    Write(file_path=state_file, content=json_dumps({
+        "team_name": team_name,
+        "teamee_map": teamee_map,
+        "wp_assignments": wp_assignments,
+        "start_time": start_time.isoformat() if hasattr(start_time, 'isoformat') else start_time,
+        "loop_iteration": loop_iteration,
+        "processed_action_ids": processed_action_ids,
+        "total_tasks": len(tasks),
+        "status": "monitoring",
+        "max_batch_size": max_batch_size,
+        "current_batch": current_batch,
+        "pending_batches": pending_batches,
+        "global_pause_flag": global_pause_flag
+    }))
+
     # ---- Phase D: 判断退出条件 ----
     completed = count(status == "completed")
     total = len(tasks)
@@ -499,6 +635,20 @@ while (now() - start_time) < max_wait_time:
         # 写入最终心跳 (DISP-001): 状态为 completed
         heartbeat_data["status"] = "completed"
         Write(file_path=".claude-daemon/heartbeat.json", content=json_dumps(heartbeat_data))
+        # 写入最终状态文件
+        Write(file_path=state_file, content=json_dumps({
+            "team_name": team_name,
+            "teamee_map": teamee_map,
+            "wp_assignments": wp_assignments,
+            "start_time": start_time.isoformat() if hasattr(start_time, 'isoformat') else start_time,
+            "loop_iteration": loop_iteration,
+            "processed_action_ids": processed_action_ids,
+            "total_tasks": len(tasks),
+            "status": "completed",
+            "max_batch_size": max_batch_size,
+            "current_batch": current_batch,
+            "pending_batches": pending_batches
+        }))
         print("所有任务完成，退出监控循环")
         break
 
@@ -508,6 +658,33 @@ while (now() - start_time) < max_wait_time:
     if pending > 0 and in_progress == 0 and len(teamee_map) == 0:
         print("异常: 有待处理任务但无活跃 Teamee 且无映射")
         break
+
+    # Phase D3: 批次自动加载 — 当前批次全部完成后从 pending_batches 加载下一批
+    if current_batch and len(teamee_map) == 0:
+        batch_completed = all(
+            find_by_id(tasks, tid).status == "completed" for tid in current_batch
+            if find_by_id(tasks, tid)
+        )
+        if batch_completed and pending_batches:
+            next_batch_size = min(max_batch_size, len(pending_batches))
+            current_batch = pending_batches[:next_batch_size]
+            pending_batches = pending_batches[next_batch_size:]
+            print(f"当前批次完成，自动加载下一批: {len(current_batch)} 个任务, 剩余 {len(pending_batches)} 个")
+            # 写回状态文件保存批次进度
+            Write(file_path=state_file, content=json_dumps({
+                "team_name": team_name,
+                "teamee_map": teamee_map,
+                "wp_assignments": wp_assignments,
+                "start_time": start_time.isoformat() if hasattr(start_time, 'isoformat') else start_time,
+                "loop_iteration": loop_iteration,
+                "processed_action_ids": processed_action_ids,
+                "total_tasks": len(tasks),
+                "status": "monitoring",
+                "max_batch_size": max_batch_size,
+                "current_batch": current_batch,
+                "pending_batches": pending_batches,
+                "global_pause_flag": global_pause_flag
+            }))
 
     sleep(loop_interval)
 
@@ -523,6 +700,36 @@ if (now() - start_time) >= max_wait_time:
             "reason": "监控超时，强制清理",
             "request_id": f"force-shutdown-{task_id}-{timestamp()}"
         })
+```
+
+**上下文恢复协议**:
+
+如果监控循环因上下文压缩（auto-compact）而中断，执行以下步骤恢复：
+
+```
+1. Read(".claude-daemon/dispatcher-state.json")
+   - 如果文件不存在: 说明首次运行或已清理，从头开始
+   - 如果文件存在且 status == "completed": 执行已完成，无需恢复
+   - 如果文件存在且 status == "monitoring": 进入恢复流程
+
+2. 从文件恢复所有状态变量:
+   state = json_loads(Read(file_path=".claude-daemon/dispatcher-state.json"))
+   team_name = state["team_name"]
+   teamee_map = state["teamee_map"]
+   wp_assignments = state["wp_assignments"]
+   start_time = parse_iso8601(state["start_time"])
+   loop_iteration = state["loop_iteration"]
+   processed_action_ids = state["processed_action_ids"]
+   max_batch_size = state.get("max_batch_size", 5)
+   current_batch = state.get("current_batch", [])
+   pending_batches = state.get("pending_batches", [])
+
+3. 验证恢复有效性:
+   - 检查 team 配置是否仍然有效
+   - 检查 teamee_map 中的 teamee 是否仍然活跃
+   - 如果某个 teamee 已不存在，从映射表中移除
+
+4. 继续监控循环（从恢复的 loop_iteration + 1 开始）
 ```
 
 **辅助函数 — 判断任务是否已解除阻塞**:
@@ -637,7 +844,11 @@ def update_task_file(task_id, status=None, increment_retry=False, append_marker=
     """更新任务状态文件"""
     task_path = f".claude-daemon/tasks/task-{task_id}.json"
     existing_data = Read(file_path=task_path)
-    task_data = json_loads(existing_data)
+    try:
+        task_data = json_loads(existing_data)
+    except Exception as e:
+        print(f"⚠️ 任务状态文件解析失败，跳过更新: {e}")
+        return
 
     # 更新状态
     if status:

@@ -5,8 +5,8 @@
   "heartbeat_dir": ".claude-daemon",
   "check_interval_sec": 30,
   "timeouts": {
-    "task_stalled_min": 15,
-    "session_stalled_min": 10,
+    "task_stalled_min": 20,
+    "session_stalled_min": 30,
     "restart_cooldown_min": 2,
     "marker_window_min": 5
   },

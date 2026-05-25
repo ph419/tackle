@@ -1,7 +1,7 @@
 # Tackle Harness 日常工作流指南
 
 > 面向实际使用场景的 AI 工作流实践手册
-> 版本: 0.0.14 | 更新: 2026-04-24
+> 版本: 0.1.2 | 更新: 2026-05-25
 
 ---
 
@@ -555,6 +555,8 @@ npx tackle-harness init
 | 查看角色 | "查看角色" / "匹配角色" / `/skill-role-manager` | skill-role-manager | 辅助 |
 | 启动守护进程 | "启动守护进程" / `/skill-watchdog-manager` | skill-watchdog-manager | 辅助 |
 | 清理团队 | "清理团队" / `/skill-team-cleanup` | skill-team-cleanup | 辅助 |
+| 配置 tackle | "配置tackle" / "sync" / `/skill-tackle-sync` | skill-tackle-sync | 辅助 |
+| 任务归档 | "任务归档" / "archive" / `/skill-task-archive` | skill-task-archive | 辅助 |
 
 ### Skill 分层图
 
@@ -583,6 +585,8 @@ npx tackle-harness init
   │   watchdog-manager ──── 启动/停止守护进程                         │
   │   team-cleanup ──── 清理孤立的 Agent Teams                       │
   │   progress-tracker ──── 保存/读取进度快照                         │
+  │   tackle-sync ──── 配置同步与项目初始化                            │
+  │   task-archive ──── 归档已完成工作包                               │
   └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -662,4 +666,4 @@ npx tackle-harness init
 
 ---
 
-> 本文档基于 Tackle Harness v0.0.14 的插件体系编写，如插件行为变更请同步更新。
+> 本文档基于 Tackle Harness v0.1.2 的插件体系编写，如插件行为变更请同步更新。

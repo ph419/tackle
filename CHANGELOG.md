@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-05-25
+
+### Fixed
+
+- README.md 修正本地安装模式技能数量（13 → 15）
+- README.md 移除重复的交互式模式描述段落
+- installation.md 将过时的 tackle-init 更正为 tackle-sync
+- daily-workflow-guide.md Skill 速查表补充 tackle-sync 和 task-archive
+
+### Changed
+
+- 统一 docs/ 目录下所有技术文档的版本号引用至 0.1.2
+- best-practices.md、daily-workflow-guide.md、plugin-development.md、ai_workflow.md 版本标识同步更新
+
 ## [0.1.1] - 2026-05-22
 
 ### Fixed
@@ -251,6 +265,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 插件注册表 (`plugin-registry.json`)
 - 运行时层：harness-build、plugin-loader、event-bus、state-store、config-manager、logger
 
+[0.1.2]: https://github.com/ph419/tackle/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/ph419/tackle/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/ph419/tackle/compare/v0.0.24...v0.1.0
 [0.0.24]: https://github.com/ph419/tackle/compare/v0.0.23...v0.0.24

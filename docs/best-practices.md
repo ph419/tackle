@@ -1,7 +1,7 @@
 # 最佳实践
 
 > 面向实际使用场景的 Tackle Harness 实践指南
-> 版本: 0.0.21 | 更新: 2026-05-09
+> 版本: 0.1.2 | 更新: 2026-05-25
 
 本文档提供了使用 Tackle Harness 的最佳实践建议，涵盖项目初始化、配置优化、多项目管理等核心场景。
 
@@ -356,7 +356,7 @@ git commit -m "docs: 更新项目配置以支持新功能"
 
 ```bash
 # 团队成员统一执行
-npm install -g tackle-harness@0.0.21
+npm install -g tackle-harness@0.1.2
 ```
 
 在项目的 README.md 或 CONTRIBUTING.md 中说明推荐的版本。
