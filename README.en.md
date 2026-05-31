@@ -43,6 +43,8 @@ flowchart LR
 
 ## Installation
 
+Prerequisite: Node.js >= 18.0.0
+
 **Recommended: Global Install**
 
 ```bash
@@ -85,7 +87,7 @@ tackle-harness build
 - **Code review** — Quality check → doc sync → experience logging
 - **Project wrap-up** — Progress summary → experience retention → completion report
 
-> For full scenario flowcharts and step-by-step guides, see [Daily Workflow Best Practices](docs/daily-workflow-guide.md)
+> For full scenario flowcharts and step-by-step guides, see [Daily Workflow Best Practices](docs/design/daily-workflow-guide.md)
 
 ## Command Reference
 
@@ -142,7 +144,7 @@ Requirement → Plan(P0) → Review(P1) → Execute(P2) → Verify(P3) → Repor
 | **P3 Verify** | Code/test/doc quality verification, extract experience | checklist, experience-logger |
 | **P4 Report** | Generate completion report, ask for next steps | completion-report |
 
-> For the full data flow diagram and stage details, see [docs/ai_workflow.md](docs/ai_workflow.md)
+> For the full data flow diagram and stage details, see [docs/ai_workflow.md](docs/design/ai_workflow.md)
 
 ## Plugin Architecture
 
@@ -155,7 +157,7 @@ Tackle Harness contains 4 plugin types, 23 plugins total:
 | Hook | 2 | Skill gate + session-start plan-mode rule injection |
 | Validator | 2 | Document sync validation, work package validation |
 
-> For plugin dependency graph and development guide, see [docs/plugin-development.md](docs/plugin-development.md)
+> For plugin dependency graph and development guide, see [docs/plugin-development.md](docs/design/plugin-development.md)
 
 ## Build Output Structure
 
@@ -295,10 +297,15 @@ The project includes GitHub Actions workflows that automatically run tests on PR
 
 ## Documentation
 
-- [Daily Workflow Best Practices](docs/daily-workflow-guide.md) - Scenario-based usage guide and Skill reference
-- [Configuration Reference](docs/config-reference.md) - Complete configuration file documentation
-- [Plugin Development](docs/plugin-development.md) - Plugin architecture and development guide
-- [Workflow Details](docs/ai_workflow.md) - Full workflow data flow and stage descriptions
+- [Daily Workflow Best Practices](docs/design/daily-workflow-guide.md) - Scenario-based usage guide and Skill reference
+- [Best Practices](docs/design/best-practices.md) - Plugin development and project best practices
+- [Installation Guide](docs/design/installation.md) - Detailed installation and configuration instructions
+- [Configuration Reference](docs/design/config-reference.md) - Complete configuration file documentation
+- [Plugin Development](docs/design/plugin-development.md) - Plugin architecture and development guide
+- [Plugin Package Convention](docs/design/plugin-package-convention.md) - Plugin directory structure and naming conventions
+- [Migration Guide](docs/design/migration-guide.md) - Version upgrade and migration instructions
+- [API Reference](docs/design/api-reference.md) - Runtime module API documentation
+- [Workflow Details](docs/design/ai_workflow.md) - Full workflow data flow and stage descriptions
 
 ## Example Projects
 
@@ -308,7 +315,7 @@ See the [examples/](examples/) directory for complete example projects:
 ## Continuous Integration
 
 The project uses GitHub Actions for CI/CD:
-- **CI Workflow** — Runs test matrix on Node.js 18 and 20
+- **CI Workflow** — Runs test matrix on Ubuntu/Windows/macOS × Node.js 18/20, with line coverage threshold check
 - **Publish Workflow** — Tag-triggered npm publishing
 
 See [.github/workflows/](.github/workflows/) for details

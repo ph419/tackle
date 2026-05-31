@@ -1,6 +1,8 @@
 /**
  * Logger - Plugin-level logging service for AI Agent Harness
  *
+ * @module logger
+ *
  * Features:
  *   - debug / info / warn / error log levels
  *   - Per-plugin log segregation
@@ -10,15 +12,20 @@
 
 'use strict';
 
-const LOG_LEVELS = {
+var LOG_LEVELS = Object.freeze({
   debug: 0,
   info: 1,
   warn: 2,
   error: 3,
-};
+});
 
+/**
+ * Logger class.
+ * @public
+ */
 class Logger {
   /**
+   * @public
    * @param {object} [options]
    * @param {string} [options.level='info'] - minimum log level
    * @param {number} [options.maxHistory=500] - max history entries to retain
@@ -36,6 +43,7 @@ class Logger {
 
   /**
    * Log a debug message.
+   * @public
    * @param {string} plugin - plugin name
    * @param {string} message
    * @param {object} [data]
@@ -46,6 +54,7 @@ class Logger {
 
   /**
    * Log an info message.
+   * @public
    * @param {string} plugin
    * @param {string} message
    * @param {object} [data]
@@ -56,6 +65,7 @@ class Logger {
 
   /**
    * Log a warning message.
+   * @public
    * @param {string} plugin
    * @param {string} message
    * @param {object} [data]
@@ -66,6 +76,7 @@ class Logger {
 
   /**
    * Log an error message.
+   * @public
    * @param {string} plugin
    * @param {string} message
    * @param {object} [data]
@@ -76,6 +87,7 @@ class Logger {
 
   /**
    * Query log history.
+   * @public
    * @param {object} [filter]
    * @param {string} [filter.plugin]   - filter by plugin name
    * @param {string} [filter.level]    - filter by level (debug/info/warn/error)
@@ -86,7 +98,7 @@ class Logger {
    */
   query(filter) {
     filter = filter || {};
-    let results = this._history;
+    var results = this._history;
 
     if (filter.plugin) {
       results = results.filter(function (e) { return e.plugin === filter.plugin; });
@@ -112,6 +124,7 @@ class Logger {
 
   /**
    * Clear all history entries.
+   * @public
    */
   clear() {
     this._history = [];
@@ -120,6 +133,7 @@ class Logger {
   /**
    * Create a child logger bound to a specific plugin name.
    * The child logger exposes debug/info/warn/error without needing the plugin arg.
+   * @public
    * @param {string} pluginName
    * @returns {object} child logger with debug/info/warn/error methods
    */
@@ -135,6 +149,10 @@ class Logger {
 
   // --- internal ---
 
+  /**
+   * Internal log handler.
+   * @internal
+   */
   _log(level, plugin, message, data) {
     var levelNum = LOG_LEVELS[level];
     if (levelNum === undefined) {

@@ -1,13 +1,22 @@
-# Development files
-.claude/
-.git/
-CLAUDE.md
-
-# Design & planning docs
-docs/design/
-docs/wp/
-docs/reports/
-task.md
-
-# Test files
+# Tests
+**/test/**
+**/*.test.js
 test/
+
+# Development
+.github/
+docs/
+reports/
+*.md
+!README.md
+!README.en.md
+!LICENSE
+
+# Build artifacts
+.claude/
+.claude-daemon/
+
+# Config
+.gitignore
+.eslintrc*
+.prettierrc*

@@ -1,0 +1,104 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Tackle Plugin Manifest",
+  "description": "Schema for plugin.json files used by tackle-harness plugins.",
+  "type": "object",
+  "required": ["name", "version", "type", "description"],
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "description": "Plugin identifier, lowercase with hyphens."
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+",
+      "description": "Semver version string (at least major.minor.patch)."
+    },
+    "type": {
+      "enum": ["skill", "hook", "validator", "provider"],
+      "description": "Plugin type determining lifecycle and companion files."
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Human-readable plugin description."
+    },
+    "source": {
+      "type": "string",
+      "description": "Source identifier for non-core plugins (npm package name or local path)."
+    },
+    "sourceType": {
+      "enum": ["core", "npm", "local"],
+      "description": "Origin type of the plugin."
+    },
+    "triggers": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Trigger phrases that activate this skill. Typically used by skill plugins."
+    },
+    "dependencies": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[a-z]" },
+      "description": "List of provider or plugin dependencies (e.g. 'provider:state-store')."
+    },
+    "provides": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[a-z]" },
+      "description": "List of service identifiers this plugin provides (e.g. 'skill:task-creator')."
+    },
+    "config": {
+      "type": "object",
+      "description": "Plugin-specific configuration options.",
+      "additionalProperties": true
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Optional metadata for build and runtime behavior.",
+      "additionalProperties": true,
+      "properties": {
+        "requiresPlanMode": {
+          "type": "boolean",
+          "description": "Whether this skill must enter Plan mode before execution."
+        },
+        "gatedByCode": {
+          "type": "boolean",
+          "description": "Whether this plugin is gated by code-level hooks."
+        },
+        "targets": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Build targets this validator applies to."
+        },
+        "deploy_assets": {
+          "type": "boolean",
+          "description": "Whether this plugin deploys static assets."
+        },
+        "deploy_path": {
+          "type": "string",
+          "description": "Target path for deployed assets."
+        }
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "description": "Declared runtime capabilities for sandbox and security control.",
+      "additionalProperties": true,
+      "properties": {
+        "filesystem": {
+          "type": "object",
+          "description": "Filesystem access whitelist. Uses a nested object (rather than boolean) to separately control read and write path patterns.",
+          "properties": {
+            "read": { "type": "array", "items": { "type": "string" }, "description": "Glob patterns for paths the plugin may read." },
+            "write": { "type": "array", "items": { "type": "string" }, "description": "Glob patterns for paths the plugin may write." }
+          }
+        },
+        "network": { "type": "boolean" },
+        "child_process": { "type": "boolean" },
+        "env": { "type": "array", "items": { "type": "string" } },
+        "plugin_access": { "type": "boolean" }
+      }
+    }
+  }
+}

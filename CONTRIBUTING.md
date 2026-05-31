@@ -10,6 +10,7 @@
 - [代码规范](#代码规范)
 - [Commit Message 规范](#commit-message-规范)
 - [分支管理](#分支管理)
+- [测试要求](#测试要求)
 - [报告 Bug 与功能建议](#报告-bug-与功能建议)
 - [插件开发](#插件开发)
 
@@ -27,7 +28,7 @@
 
 ### 前置要求
 
-- **Node.js** >= 14.0.0（推荐使用 LTS 版本）
+- **Node.js** >= 18.0.0（推荐使用 LTS 版本）
 - **Git** >= 2.0
 - 一个代码编辑器（推荐 VS Code）
 
@@ -47,7 +48,7 @@
 3. **添加上游仓库**
 
    ```bash
-   git remote add upstream https://github.com/<org>/tackle.git
+   git remote add upstream https://github.com/ph419/tackle.git
    ```
 
 4. **验证构建**
@@ -84,9 +85,21 @@ node bin/tackle.js build
 
 # 插件完整性验证
 node bin/tackle.js validate
+
+# 运行全部测试
+npm test
+
+# 仅运行 runtime 单元测试
+npm run test:runtime
+
+# 仅运行集成测试
+npm run test:integration
+
+# 运行单个测试文件
+node --test test/runtime/test-harness-build.js
 ```
 
-> **注意：** 项目目前暂未配置自动化测试框架（如 Jest / Mocha），测试主要通过 `validate` 命令和手动验证进行。如果你有兴趣引入自动化测试，欢迎提交 Proposal。
+项目使用 Node.js 内置的 `node:test` 测试框架，无需安装额外依赖。
 
 ### 3. 提交修改
 
@@ -257,11 +270,54 @@ git rebase upstream/main
 
 ---
 
+## 测试要求
+
+### 测试框架
+
+项目使用 Node.js 内置的 `node:test`，无需安装外部依赖。
+
+### 测试命令
+
+```bash
+# 运行全部测试
+npm test
+
+# 仅运行 runtime 单元测试
+npm run test:runtime
+
+# 仅运行集成测试
+npm run test:integration
+
+# 运行单个测试文件
+node --test test/runtime/test-harness-build.js
+
+# 端到端冒烟测试
+npm run test:smoke
+```
+
+### 测试文件组织
+
+| 目录 | 说明 |
+|------|------|
+| `test/runtime/` | Runtime 模块单元测试 |
+| `test/integration/` | 集成测试 |
+| `test/smoke-test.js` | 端到端冒烟测试 |
+
+测试文件命名格式：`test-{module}.js`
+
+### 新增代码的测试要求
+
+- 新功能必须包含对应测试
+- Bug 修复应包含回归测试
+- PR 提交前确保所有测试通过：`npm test`
+
+---
+
 ## 报告 Bug 与功能建议
 
 ### Bug 报告
 
-在 [GitHub Issues](https://github.com/<org>/tackle/issues) 中创建新 Issue，使用 **Bug Report** 标签，并包含以下信息：
+在 [GitHub Issues](https://github.com/ph419/tackle/issues) 中创建新 Issue，使用 **Bug Report** 标签，并包含以下信息：
 
 1. **Bug 描述**：清晰描述遇到的问题
 2. **复现步骤**：
@@ -339,7 +395,7 @@ git rebase upstream/main
 
 如果你有任何问题，可以通过以下方式获取帮助：
 
-- 在 [GitHub Issues](https://github.com/<org>/tackle/issues) 中提问
+- 在 [GitHub Issues](https://github.com/ph419/tackle/issues) 中提问
 - 查阅 [文档目录](docs/) 中的相关文档
 
 再次感谢你的贡献！每一个 PR、每一个 Issue、每一行代码都让 Tackle Harness 变得更好。

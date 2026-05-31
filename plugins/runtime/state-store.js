@@ -1,6 +1,8 @@
 /**
  * StateStore - File-backed key-value state storage for AI Agent Harness
  *
+ * @module state-store
+ *
  * Features:
  *   - get(key) / set(key, value) / delete(key)
  *   - JSON file persistence via filesystem adapter
@@ -25,10 +27,13 @@
 
 var fs = require('fs');
 var path = require('path');
+var Logger = require('./logger');
+var logger = new Logger();
 
 /**
  * Filesystem adapter for StateStore.
  * Reads/writes a JSON file to disk with fault tolerance.
+ * @internal
  */
 class FileSystemAdapter {
   /**
@@ -48,7 +53,7 @@ class FileSystemAdapter {
     if (this.logger && this.logger.warn) {
       this.logger.warn('[StateStore] ' + msg);
     } else {
-      console.warn('[StateStore] ' + msg);
+      logger.warn('state-store', msg);
     }
   }
 
@@ -136,6 +141,7 @@ class FileSystemAdapter {
 
 /**
  * In-memory adapter for StateStore (useful for testing).
+ * @public
  */
 class MemoryAdapter {
   constructor() {
@@ -151,8 +157,13 @@ class MemoryAdapter {
   }
 }
 
+/**
+ * StateStore - file-backed key-value state storage.
+ * @public
+ */
 class StateStore {
   /**
+   * @public
    * @param {object} [options]
    * @param {string} [options.filePath] - path to state file (default: .claude-state in cwd)
    * @param {object} [options.adapter]  - custom adapter (for testing); overrides filePath
@@ -179,6 +190,7 @@ class StateStore {
 
   /**
    * Get a value by key.
+   * @public
    * @param {string} key - dot-notation key, e.g. 'harness.state'
    * @returns {Promise<*|undefined>}
    */
@@ -189,6 +201,7 @@ class StateStore {
 
   /**
    * Set a value by key.
+   * @public
    * @param {string} key - dot-notation key
    * @param {*} value
    * @returns {Promise<void>}
@@ -208,7 +221,7 @@ class StateStore {
         try {
           cb(key, oldValue, value);
         } catch (err) {
-          console.error('[StateStore] Subscriber error for key "' + key + '":', err.message);
+          logger.error('state-store', 'Subscriber error for key "' + key + '": ' + err.message);
         }
       });
     }
@@ -216,6 +229,7 @@ class StateStore {
 
   /**
    * Delete a key.
+   * @public
    * @param {string} key
    * @returns {Promise<void>}
    */
@@ -228,6 +242,7 @@ class StateStore {
 
   /**
    * Subscribe to changes on a key.
+   * @public
    * @param {string} key
    * @param {Function} callback - callback(key, oldValue, newValue)
    * @returns {{ unsubscribe: Function }}
@@ -253,6 +268,7 @@ class StateStore {
 
   /**
    * Get all keys currently stored.
+   * @public
    * @returns {Promise<string[]>}
    */
   async keys() {
@@ -262,6 +278,7 @@ class StateStore {
 
   /**
    * Force reload from disk on next access.
+   * @public
    */
   invalidate() {
     this._cache = null;
@@ -271,6 +288,7 @@ class StateStore {
 
   /**
    * Load state (with caching).
+   * @internal
    * @returns {object}
    */
   _load() {
@@ -282,6 +300,7 @@ class StateStore {
 
   /**
    * Get a nested value using dot-notation key.
+   * @internal
    * @param {object} obj
    * @param {string} key - e.g. 'harness.state'
    * @returns {*|undefined}
@@ -301,6 +320,7 @@ class StateStore {
   /**
    * Set a nested value using dot-notation key.
    * Creates intermediate objects as needed.
+   * @internal
    * @param {object} obj
    * @param {string} key
    * @param {*} value
@@ -319,6 +339,7 @@ class StateStore {
 
   /**
    * Delete a nested value using dot-notation key.
+   * @internal
    * @param {object} obj
    * @param {string} key
    */
@@ -336,6 +357,7 @@ class StateStore {
 
   /**
    * Recursively flatten an object into dot-notation keys.
+   * @internal
    * @param {object} obj
    * @param {string} prefix
    * @returns {string[]}

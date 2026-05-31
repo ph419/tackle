@@ -1,6 +1,8 @@
 /**
  * ConfigManager - Three-layer configuration management for AI Agent Harness
  *
+ * @module config-manager
+ *
  * Layer precedence (highest wins):
  *   1. Environment variables  (HARNESS_<KEY>)
  *   2. harness-config.yaml    (user/project-level)
@@ -21,6 +23,7 @@ var path = require('path');
  * Minimal YAML-like parser for simple key-value YAML files.
  * Handles nested structure via indentation (spaces only).
  * This is NOT a full YAML parser - it covers the subset used by harness-config.yaml.
+ * @internal
  */
 function parseSimpleYaml(content) {
   var result = {};
@@ -77,6 +80,7 @@ function parseSimpleYaml(content) {
 
 /**
  * Parse a YAML scalar value.
+ * @internal
  */
 function parseValue(val) {
   if (val === 'true') return true;
@@ -96,8 +100,13 @@ function parseValue(val) {
   return val;
 }
 
+/**
+ * ConfigManager class.
+ * @public
+ */
 class ConfigManager {
   /**
+   * @public
    * @param {object} [options]
    * @param {string} [options.configPath] - path to harness-config.yaml
    * @param {object} [options.defaults]   - plugin default configs { pluginName: { key: value } }
@@ -120,6 +129,7 @@ class ConfigManager {
    * Get a config value with three-layer resolution:
    *   runtime override > harness-config.yaml > plugin defaults
    *
+   * @public
    * @param {string} key - dot-notation key
    * @param {*} [defaultValue] - fallback if key not found in any layer
    * @returns {*}
@@ -151,6 +161,7 @@ class ConfigManager {
    * Resolution order:
    *   runtime override > env var > harness-config overrides section > harness-config root > plugin defaults
    *
+   * @public
    * @param {string} pluginName
    * @param {string} key
    * @param {*} [defaultValue]
@@ -180,6 +191,7 @@ class ConfigManager {
 
   /**
    * Set a runtime override. Takes highest priority.
+   * @public
    * @param {string} key
    * @param {*} value
    */
@@ -189,6 +201,7 @@ class ConfigManager {
 
   /**
    * Clear a runtime override.
+   * @public
    * @param {string} key
    */
   clearOverride(key) {
@@ -197,6 +210,7 @@ class ConfigManager {
 
   /**
    * Get the full parsed YAML config (for advanced usage).
+   * @public
    * @returns {object}
    */
   getAll() {
@@ -205,6 +219,7 @@ class ConfigManager {
 
   /**
    * Create a scoped config getter for a specific plugin.
+   * @public
    * @param {string} pluginName
    * @returns {{ get: Function }}
    */
@@ -221,6 +236,7 @@ class ConfigManager {
 
   /**
    * Load and cache the YAML config.
+   * @internal
    * @returns {object}
    */
   _getYamlConfig() {
@@ -241,6 +257,7 @@ class ConfigManager {
 
   /**
    * Get nested value by dot-notation key.
+   * @internal
    */
   _getNested(obj, key) {
     var parts = key.split('.');
@@ -256,6 +273,7 @@ class ConfigManager {
 
   /**
    * Set nested value by dot-notation key.
+   * @internal
    */
   _setNested(obj, key, value) {
     var parts = key.split('.');
@@ -271,6 +289,7 @@ class ConfigManager {
 
   /**
    * Delete nested value by dot-notation key.
+   * @internal
    */
   _deleteNested(obj, key) {
     var parts = key.split('.');
@@ -287,6 +306,7 @@ class ConfigManager {
   /**
    * Walk up from cwd to find the project root (directory containing task.md or CLAUDE.md).
    * Falls back to cwd if not found.
+   * @internal
    * @returns {string}
    */
   _findProjectRoot() {

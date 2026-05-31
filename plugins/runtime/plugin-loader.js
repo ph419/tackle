@@ -1,6 +1,8 @@
 /**
  * PluginLoader - Plugin discovery, dependency resolution, and lifecycle management
  *
+ * @module plugin-loader
+ *
  * Features:
  *   - Load plugins from plugin-registry.json
  *   - Topological sort for dependency order
@@ -10,16 +12,28 @@
  *   - Error isolation per plugin
  */
 
+// FILE-SIZE-MONITOR: 645 lines (as of 2026-05-31)
+// SPLIT-THRESHOLD: 800 lines — if exceeded, consider splitting into:
+//   - plugin-loader-core.js (loading, activation, dependency injection)
+//   - plugin-loader-lifecycle.js (lifecycle management, event handling)
+
 'use strict';
 
 var fs = require('fs');
 var path = require('path');
-var { PluginState, PluginType, SkillPlugin, HookPlugin, ValidatorPlugin, ProviderPlugin } = require('../contracts/plugin-interface');
-var { HookDispatcher } = require('./hook-dispatcher');
-var { ValidatorPipeline } = require('./validator-pipeline');
+var pluginInterface = require('../contracts/plugin-interface');
+var PluginState = pluginInterface.PluginState;
+var PluginType = pluginInterface.PluginType;
+var SkillPlugin = pluginInterface.SkillPlugin;
+var HookPlugin = pluginInterface.HookPlugin;
+var ValidatorPlugin = pluginInterface.ValidatorPlugin;
+var ProviderPlugin = pluginInterface.ProviderPlugin;
+var HookDispatcher = require('./hook-dispatcher').HookDispatcher;
+var ValidatorPipeline = require('./validator-pipeline').ValidatorPipeline;
 
 class PluginLoader {
   /**
+   * @public
    * @param {object} options
    * @param {string} options.registryPath  - path to plugin-registry.json
    * @param {object} options.eventBus      - EventBus instance
@@ -56,6 +70,7 @@ class PluginLoader {
    * Respects dependency order via topological sort.
    * Handles empty registries gracefully.
    *
+   * @public
    * @returns {Promise<string[]>} names of successfully loaded plugins
    */
   async loadAll() {
@@ -111,6 +126,7 @@ class PluginLoader {
    * Activate a single loaded plugin.
    * Creates PluginContext and injects EventBus, StateStore, ConfigManager, Logger.
    * For Provider plugins, calls factory() and registers the output.
+   * @public
    * @param {string} name - plugin name
    */
   async activate(name) {
@@ -182,6 +198,7 @@ class PluginLoader {
 
   /**
    * Deactivate a single plugin.
+   * @public
    * @param {string} name
    */
   async deactivate(name) {
@@ -203,6 +220,7 @@ class PluginLoader {
 
   /**
    * Deactivate all loaded plugins in reverse order.
+   * @public
    */
   async deactivateAll() {
     var names = Array.from(this.loadedPlugins.keys()).reverse();
@@ -217,6 +235,7 @@ class PluginLoader {
 
   /**
    * Get a loaded plugin by name.
+   * @public
    * @param {string} name
    * @returns {object|undefined}
    */
@@ -226,6 +245,7 @@ class PluginLoader {
 
   /**
    * Check if a plugin is loaded.
+   * @public
    * @param {string} name
    * @returns {boolean}
    */
@@ -235,6 +255,7 @@ class PluginLoader {
 
   /**
    * Get names of all loaded plugins.
+   * @public
    * @returns {string[]}
    */
   getLoadedNames() {
@@ -243,6 +264,7 @@ class PluginLoader {
 
   /**
    * Get a registered Provider instance by name.
+   * @public
    * @param {string} name - provider name
    * @returns {object|undefined} Provider instance from factory()
    */
@@ -252,6 +274,7 @@ class PluginLoader {
 
   /**
    * Get all registered Provider names.
+   * @public
    * @returns {string[]}
    */
   getRegisteredProviders() {
@@ -261,6 +284,7 @@ class PluginLoader {
   /**
    * Get the HookDispatcher instance for internal hook execution.
    * Returns null if no hooks have been activated yet.
+   * @public
    * @returns {HookDispatcher|null}
    */
   getHookDispatcher() {
@@ -270,6 +294,7 @@ class PluginLoader {
   /**
    * Get the ValidatorPipeline instance for automated validation.
    * Returns null if no validators have been activated yet.
+   * @public
    * @returns {ValidatorPipeline|null}
    */
   getValidatorPipeline() {
@@ -280,6 +305,7 @@ class PluginLoader {
    * Dispatch a hook event using internal mode.
    * Shortcut for HookDispatcher.dispatch() with mode='internal'.
    *
+   * @public
    * @param {object} context - hook context { event, tool?, skill? }
    * @returns {Promise<{ allowed: boolean, results?, reason? }>}
    */
@@ -296,6 +322,7 @@ class PluginLoader {
 
   /**
    * Read and parse the registry file.
+   * @internal
    * @returns {object}
    */
   _readRegistry() {
@@ -312,6 +339,7 @@ class PluginLoader {
   /**
    * Extract plugin names and configs from registry.
    * Supports both array format and object format.
+   * @internal
    * @returns {string[]}
    */
   _getPluginNames() {
@@ -344,21 +372,57 @@ class PluginLoader {
 
   /**
    * Build a dependency graph from plugin configs.
+   * Handles both plugin dependencies (dependencies.plugins) and
+   * provider dependencies (dependencies.providers).
+   *
+   * Provider dependencies are resolved by scanning plugin.json files to
+   * build a provider-name -> plugin-name mapping, then adding edges so
+   * that plugins depending on a provider are loaded after the provider
+   * plugin that provides it.
+   *
+   * @internal
    * @param {string[]} pluginNames
    * @returns {Map<string, string[]>} name -> dependency names
    */
   _buildDependencyGraph(pluginNames) {
     var graph = new Map();
+
+    // Phase 1: Build a provider-name -> plugin-name mapping by scanning plugin.json
+    var providerToPlugin = this._buildProviderMap(pluginNames);
+
+    // Phase 2: Build dependency edges
     for (var i = 0; i < pluginNames.length; i++) {
       var name = pluginNames[i];
       var entry = this._pluginConfigs.get(name);
       var deps = [];
 
-      // Entry format: { name, source, enabled, config }
-      // Dependencies are in entry.config.dependencies.plugins
+      // Plugin dependencies: entry.config.dependencies.plugins
       if (entry && entry.config && entry.config.dependencies) {
-        deps = entry.config.dependencies.plugins || [];
-        if (!Array.isArray(deps)) deps = [];
+        var pluginDeps = entry.config.dependencies.plugins || [];
+        if (Array.isArray(pluginDeps)) {
+          for (var j = 0; j < pluginDeps.length; j++) {
+            deps.push(pluginDeps[j]);
+          }
+        }
+      }
+
+      // Provider dependencies: entry.config.dependencies.providers
+      if (entry && entry.config && entry.config.dependencies) {
+        var providerDeps = entry.config.dependencies.providers || [];
+        if (Array.isArray(providerDeps)) {
+          for (var k = 0; k < providerDeps.length; k++) {
+            var providerName = providerDeps[k];
+            var resolvedPlugin = providerToPlugin.get(providerName);
+            if (resolvedPlugin) {
+              // Avoid duplicate edges
+              if (deps.indexOf(resolvedPlugin) === -1) {
+                deps.push(resolvedPlugin);
+              }
+            } else {
+              this._log('warn', 'Plugin "' + name + '" depends on provider "' + providerName + '" which is not provided by any plugin');
+            }
+          }
+        }
       }
 
       graph.set(name, deps);
@@ -367,7 +431,56 @@ class PluginLoader {
   }
 
   /**
+   * Build a mapping from provider names to plugin names by scanning plugin.json files.
+   * Reads each plugin's plugin.json to discover the "provides" field.
+   *
+   * @internal
+   * @param {string[]} pluginNames
+   * @returns {Map<string, string>} provider-name -> plugin-name
+   */
+  _buildProviderMap(pluginNames) {
+    var providerToPlugin = new Map();
+
+    for (var i = 0; i < pluginNames.length; i++) {
+      var name = pluginNames[i];
+      var entry = this._pluginConfigs.get(name);
+
+      // Resolve plugin directory to read plugin.json
+      try {
+        var source = entry && entry.source ? entry.source : name;
+        var sourceType = entry && entry.sourceType ? entry.sourceType : 'core';
+        var resolvePluginPath = require('./resolve-plugin-path').resolvePluginPath;
+        var registryDir = path.resolve(path.dirname(this._registryPath));
+        var defaultPluginsDir = path.join(registryDir, 'core');
+        var pluginDir = resolvePluginPath(
+          { name: name, source: source, sourceType: sourceType },
+          defaultPluginsDir,
+          registryDir
+        );
+
+        var pluginJsonPath = path.join(pluginDir, 'plugin.json');
+        var pluginJson = this._readPluginJson(pluginJsonPath);
+
+        if (pluginJson.provides && Array.isArray(pluginJson.provides)) {
+          for (var j = 0; j < pluginJson.provides.length; j++) {
+            var providerName = pluginJson.provides[j].replace(/^provider:/, '');
+            providerToPlugin.set(providerName, name);
+            // Also store the full form (e.g. "provider:state-store")
+            providerToPlugin.set(pluginJson.provides[j], name);
+          }
+        }
+      } catch (err) {
+        // If we can't resolve or read, skip — will be caught later during load
+        this._log('warn', 'Could not scan plugin.json for "' + name + '": ' + err.message);
+      }
+    }
+
+    return providerToPlugin;
+  }
+
+  /**
    * Topological sort with circular dependency detection.
+   * @internal
    * @param {Map<string, string[]>} graph - name -> dependencies
    * @returns {string[]} sorted plugin names
    * @throws {Error} on circular dependency or missing dependency
@@ -419,14 +532,28 @@ class PluginLoader {
    * - Skill: only metadata, no JS module
    * - Hook/Validator/Provider: require() index.js and instantiate
    *
+   * @internal
    * @param {string} name
    * @param {object} config
    */
   async _loadPlugin(name, config) {
     var source = config && config.source ? config.source : name;
-    // Resolve plugin directory using absolute path
+    var sourceType = config && config.sourceType ? config.sourceType : 'core';
+    // Resolve plugin directory using shared resolver
+    var resolvePluginPath = require('./resolve-plugin-path').resolvePluginPath;
     var registryDir = path.resolve(path.dirname(this._registryPath));
-    var pluginDir = path.join(registryDir, 'core', source);
+    var defaultPluginsDir = path.join(registryDir, 'core');
+    var pluginDir;
+    try {
+      pluginDir = resolvePluginPath(
+        { name: name, source: source, sourceType: sourceType },
+        defaultPluginsDir,
+        registryDir
+      );
+    } catch (resolveErr) {
+      this._log('error', 'Path resolution failed for plugin "' + name + '": ' + resolveErr.message);
+      throw resolveErr;
+    }
     var pluginJsonPath = path.join(pluginDir, 'plugin.json');
 
     // Read plugin.json to determine type
@@ -481,6 +608,7 @@ class PluginLoader {
 
   /**
    * Read and parse plugin.json.
+   * @internal
    * @param {string} jsonPath
    * @returns {object} parsed JSON or empty object
    */
@@ -498,21 +626,21 @@ class PluginLoader {
    * Get a registered Provider instance by name.
    * Returns the factory output from the provider registry.
    * Used by PluginContext.getProvider().
+   * @internal
    * @param {string} name - provider name
-   * @returns {Promise<object|undefined>} Provider instance or undefined
+   * @returns {object|undefined} Provider instance or undefined
    */
-  async _getProvider(name) {
+  _getProvider(name) {
     return this._providerRegistry.get(name);
   }
 
   /**
    * Internal logging helper.
+   * @internal
    */
   _log(level, message) {
     if (this._logger && typeof this._logger[level] === 'function') {
       this._logger[level]('plugin-loader', message);
-    } else {
-      console.log('[plugin-loader] [' + level + '] ' + message);
     }
   }
 }

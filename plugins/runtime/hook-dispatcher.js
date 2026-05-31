@@ -23,11 +23,12 @@ var { PluginType, PluginState } = require('../contracts/plugin-interface');
 
 /**
  * Execution mode constants.
+ * @public
  */
-const ExecutionMode = {
+var ExecutionMode = Object.freeze({
   EXTERNAL: 'external', // Command-based via settings.json (default)
   INTERNAL: 'internal', // Programmatic via HookPlugin.handle()
-};
+});
 
 /**
  * Default configuration.
@@ -39,9 +40,11 @@ var DEFAULT_CONFIG = {
 
 /**
  * HookDispatcher class.
+ * @public
  */
 class HookDispatcher {
   /**
+   * @public
    * @param {object} options
    * @param {object} options.pluginLoader - PluginLoader instance (required for internal mode)
    * @param {object} options.logger       - Logger instance (optional)
@@ -58,6 +61,7 @@ class HookDispatcher {
   /**
    * Dispatch a hook event to appropriate hooks.
    *
+   * @public
    * @param {object} context
    * @param {string} context.event   - Event type: 'PreToolUse', 'PostToolUse', 'SessionStart'
    * @param {string} [context.tool]  - Tool name (for PreToolUse/PostToolUse)
@@ -223,6 +227,7 @@ class HookDispatcher {
 
   /**
    * Set the default execution mode.
+   * @public
    * @param {string} mode - 'external' or 'internal'
    */
   setMode(mode) {
@@ -235,6 +240,7 @@ class HookDispatcher {
 
   /**
    * Get the current default execution mode.
+   * @public
    * @returns {string}
    */
   getMode() {
@@ -243,6 +249,7 @@ class HookDispatcher {
 
   /**
    * Check if internal mode is available (requires pluginLoader).
+   * @public
    * @returns {boolean}
    */
   canUseInternalMode() {
@@ -251,6 +258,7 @@ class HookDispatcher {
 
   /**
    * Get statistics about loaded hooks.
+   * @public
    * @returns {{ total: number, byEvent: object, byPriority: object[] }}
    */
   getHookStats() {
@@ -297,8 +305,6 @@ class HookDispatcher {
   _log(level, message) {
     if (this._logger && typeof this._logger[level] === 'function') {
       this._logger[level]('hook-dispatcher', message);
-    } else {
-      console.log('[hook-dispatcher] [' + level + '] ' + message);
     }
   }
 }

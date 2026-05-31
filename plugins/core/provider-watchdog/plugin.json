@@ -1,6 +1,6 @@
 {
   "name": "provider-watchdog",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "type": "provider",
   "description": "Watchdog 守护进程 Provider - 为 Agent Teams 提供外部监控、故障检测和自动重启能力",
   "dependencies": [],

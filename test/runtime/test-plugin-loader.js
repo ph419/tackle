@@ -529,3 +529,531 @@ test.describe('PluginLoader - Deactivation', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 });
+
+test.describe('PluginLoader - External Plugin Loading (sourceType)', () => {
+  test('should load local plugin via sourceType=local with absolute path', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-loader-test-'));
+    const externalDir = path.join(tmpDir, 'external-plugins', 'ext-skill');
+    fs.mkdirSync(externalDir, { recursive: true });
+
+    // Create plugin.json in external directory
+    fs.writeFileSync(
+      path.join(externalDir, 'plugin.json'),
+      JSON.stringify({
+        name: 'ext-skill',
+        version: '1.0.0',
+        type: 'skill',
+        description: 'External skill plugin'
+      }, null, 2),
+      'utf-8'
+    );
+
+    // Create registry with sourceType=local and absolute path
+    const registryPath = path.join(tmpDir, 'plugin-registry.json');
+    fs.writeFileSync(registryPath, JSON.stringify({
+      version: '1.0.0',
+      plugins: [{
+        name: 'ext-skill',
+        source: externalDir,
+        sourceType: 'local',
+        enabled: true,
+        config: {}
+      }]
+    }, null, 2), 'utf-8');
+
+    const PluginLoader = require('../../plugins/runtime/plugin-loader');
+    const loader = new PluginLoader({
+      registryPath,
+      eventBus: new MockEventBus(),
+      stateStore: new MockStateStore(),
+      configManager: new MockConfigManager(),
+      logger: new MockLogger()
+    });
+
+    const loaded = await loader.loadAll();
+
+    assert.deepStrictEqual(loaded, ['ext-skill'], 'external local plugin loaded');
+    assert.strictEqual(loader.isLoaded('ext-skill'), true);
+
+    // Cleanup
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test('should load local plugin via sourceType=local with relative path', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-loader-test-'));
+    const registryDir = path.join(tmpDir, 'plugins');
+    const externalDir = path.join(tmpDir, 'external-plugins', 'ext-skill');
+    fs.mkdirSync(externalDir, { recursive: true });
+    fs.mkdirSync(registryDir, { recursive: true });
+
+    // Create plugin.json in external directory
+    fs.writeFileSync(
+      path.join(externalDir, 'plugin.json'),
+      JSON.stringify({
+        name: 'ext-skill',
+        version: '1.0.0',
+        type: 'skill',
+        description: 'External skill plugin'
+      }, null, 2),
+      'utf-8'
+    );
+
+    // Create registry with relative path (relative to registry dir)
+    const registryPath = path.join(registryDir, 'plugin-registry.json');
+    fs.writeFileSync(registryPath, JSON.stringify({
+      version: '1.0.0',
+      plugins: [{
+        name: 'ext-skill',
+        source: '../external-plugins/ext-skill',
+        sourceType: 'local',
+        enabled: true,
+        config: {}
+      }]
+    }, null, 2), 'utf-8');
+
+    const PluginLoader = require('../../plugins/runtime/plugin-loader');
+    const loader = new PluginLoader({
+      registryPath,
+      eventBus: new MockEventBus(),
+      stateStore: new MockStateStore(),
+      configManager: new MockConfigManager(),
+      logger: new MockLogger()
+    });
+
+    const loaded = await loader.loadAll();
+
+    assert.deepStrictEqual(loaded, ['ext-skill'], 'external local plugin loaded via relative path');
+
+    // Cleanup
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test('should give clear error for invalid sourceType', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-loader-test-'));
+    const registryPath = path.join(tmpDir, 'plugin-registry.json');
+    fs.writeFileSync(registryPath, JSON.stringify({
+      version: '1.0.0',
+      plugins: [{
+        name: 'bad-plugin',
+        source: 'bad-plugin',
+        sourceType: 'ftp',
+        enabled: true,
+        config: {}
+      }]
+    }, null, 2), 'utf-8');
+
+    const PluginLoader = require('../../plugins/runtime/plugin-loader');
+    const logger = new MockLogger();
+    const loader = new PluginLoader({
+      registryPath,
+      eventBus: new MockEventBus(),
+      stateStore: new MockStateStore(),
+      configManager: new MockConfigManager(),
+      logger
+    });
+
+    const loaded = await loader.loadAll();
+
+    // Plugin should fail to load (error logged, not thrown)
+    assert.deepStrictEqual(loaded, [], 'invalid sourceType plugin not loaded');
+
+    // Check error was logged
+    const errorLogs = logger.logs.filter(l => l.level === 'error' && l.msg.includes('Invalid sourceType'));
+    assert.ok(errorLogs.length > 0, 'error logged for invalid sourceType');
+
+    // Cleanup
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test('should give clear error for unresolvable npm package', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-loader-test-'));
+    const registryPath = path.join(tmpDir, 'plugin-registry.json');
+    fs.writeFileSync(registryPath, JSON.stringify({
+      version: '1.0.0',
+      plugins: [{
+        name: 'npm-plugin',
+        source: 'nonexistent-tackle-plugin-xyz-999',
+        sourceType: 'npm',
+        enabled: true,
+        config: {}
+      }]
+    }, null, 2), 'utf-8');
+
+    const PluginLoader = require('../../plugins/runtime/plugin-loader');
+    const logger = new MockLogger();
+    const loader = new PluginLoader({
+      registryPath,
+      eventBus: new MockEventBus(),
+      stateStore: new MockStateStore(),
+      configManager: new MockConfigManager(),
+      logger
+    });
+
+    const loaded = await loader.loadAll();
+
+    assert.deepStrictEqual(loaded, [], 'unresolvable npm plugin not loaded');
+
+    // Check error was logged
+    const errorLogs = logger.logs.filter(l => l.level === 'error' && l.msg.includes('Failed to resolve npm'));
+    assert.ok(errorLogs.length > 0, 'error logged for unresolvable npm package');
+
+    // Cleanup
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test('should load core plugins and local plugins together', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-loader-test-'));
+    const externalDir = path.join(tmpDir, 'external-plugins', 'ext-skill');
+    fs.mkdirSync(externalDir, { recursive: true });
+
+    // Create external plugin
+    fs.writeFileSync(
+      path.join(externalDir, 'plugin.json'),
+      JSON.stringify({
+        name: 'ext-skill',
+        version: '1.0.0',
+        type: 'skill',
+        description: 'External skill plugin'
+      }, null, 2),
+      'utf-8'
+    );
+
+    // Create registry with both core and local plugins
+    const registryPath = createTestRegistry(tmpDir, [
+      { name: 'core-skill', type: 'skill' }
+    ]);
+
+    // Read and add external plugin entry
+    const registry = JSON.parse(fs.readFileSync(registryPath, 'utf-8'));
+    registry.plugins.push({
+      name: 'ext-skill',
+      source: externalDir,
+      sourceType: 'local',
+      enabled: true,
+      config: {}
+    });
+    fs.writeFileSync(registryPath, JSON.stringify(registry, null, 2), 'utf-8');
+
+    const PluginLoader = require('../../plugins/runtime/plugin-loader');
+    const loader = new PluginLoader({
+      registryPath,
+      eventBus: new MockEventBus(),
+      stateStore: new MockStateStore(),
+      configManager: new MockConfigManager(),
+      logger: new MockLogger()
+    });
+
+    const loaded = await loader.loadAll();
+    loaded.sort();
+
+    assert.deepStrictEqual(loaded, ['core-skill', 'ext-skill'], 'both core and local plugins loaded');
+
+    // Cleanup
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+});
+
+test.describe('PluginLoader - Provider Dependency Chain', () => {
+  test('should load plugin after its provider dependency', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-loader-test-'));
+    const registryPath = createTestRegistry(tmpDir, [
+      { name: 'consumer-plugin', type: 'skill', config: { dependencies: { providers: ['provider:state-store'] } } },
+      { name: 'provider-state-store', type: 'provider', provides: ['provider:state-store'], version: '1.0.0' }
+    ]);
+
+    const PluginLoader = require('../../plugins/runtime/plugin-loader');
+    const logger = new MockLogger();
+    const loadOrder = [];
+    const originalLog = logger.info.bind(logger);
+    logger.info = (plugin, msg) => {
+      if (msg.includes('Load order resolved')) {
+        const match = msg.match(/Load order resolved: (.+)/);
+        if (match) loadOrder.push(...match[1].split(', '));
+      }
+      originalLog(plugin, msg);
+    };
+
+    const loader = new PluginLoader({
+      registryPath,
+      eventBus: new MockEventBus(),
+      stateStore: new MockStateStore(),
+      configManager: new MockConfigManager(),
+      logger
+    });
+
+    await loader.loadAll();
+
+    const providerIndex = loadOrder.indexOf('provider-state-store');
+    const consumerIndex = loadOrder.indexOf('consumer-plugin');
+    assert.ok(providerIndex < consumerIndex, 'provider should be loaded before consumer');
+
+    // Cleanup
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test('should resolve provider dependency using short name without prefix', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-loader-test-'));
+    const registryPath = createTestRegistry(tmpDir, [
+      { name: 'consumer-plugin', type: 'skill', config: { dependencies: { providers: ['state-store'] } } },
+      { name: 'provider-state-store', type: 'provider', provides: ['provider:state-store'], version: '1.0.0' }
+    ]);
+
+    const PluginLoader = require('../../plugins/runtime/plugin-loader');
+    const logger = new MockLogger();
+    const loadOrder = [];
+    const originalLog = logger.info.bind(logger);
+    logger.info = (plugin, msg) => {
+      if (msg.includes('Load order resolved')) {
+        const match = msg.match(/Load order resolved: (.+)/);
+        if (match) loadOrder.push(...match[1].split(', '));
+      }
+      originalLog(plugin, msg);
+    };
+
+    const loader = new PluginLoader({
+      registryPath,
+      eventBus: new MockEventBus(),
+      stateStore: new MockStateStore(),
+      configManager: new MockConfigManager(),
+      logger
+    });
+
+    await loader.loadAll();
+
+    const providerIndex = loadOrder.indexOf('provider-state-store');
+    const consumerIndex = loadOrder.indexOf('consumer-plugin');
+    assert.ok(providerIndex < consumerIndex, 'provider loaded before consumer with short name');
+
+    // Cleanup
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test('should detect circular provider dependencies', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-loader-test-'));
+
+    // Provider A depends on Provider B, Provider B depends on Provider A
+    const registryPath = createTestRegistry(tmpDir, [
+      { name: 'provider-a', type: 'provider', provides: ['provider:a'], version: '1.0.0', config: { dependencies: { providers: ['provider:b'] } } },
+      { name: 'provider-b', type: 'provider', provides: ['provider:b'], version: '1.0.0', config: { dependencies: { providers: ['provider:a'] } } }
+    ]);
+
+    const PluginLoader = require('../../plugins/runtime/plugin-loader');
+    const loader = new PluginLoader({
+      registryPath,
+      eventBus: new MockEventBus(),
+      stateStore: new MockStateStore(),
+      configManager: new MockConfigManager(),
+      logger: new MockLogger()
+    });
+
+    await assert.rejects(
+      () => loader.loadAll(),
+      (err) => err.message.includes('Circular dependency')
+    );
+
+    // Cleanup
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test('should handle mixed plugin and provider dependencies', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-loader-test-'));
+    const registryPath = createTestRegistry(tmpDir, [
+      { name: 'consumer-plugin', type: 'skill', config: { dependencies: { plugins: ['base-plugin'], providers: ['provider:state-store'] } } },
+      { name: 'base-plugin', type: 'skill' },
+      { name: 'provider-state-store', type: 'provider', provides: ['provider:state-store'], version: '1.0.0' }
+    ]);
+
+    const PluginLoader = require('../../plugins/runtime/plugin-loader');
+    const logger = new MockLogger();
+    const loadOrder = [];
+    const originalLog = logger.info.bind(logger);
+    logger.info = (plugin, msg) => {
+      if (msg.includes('Load order resolved')) {
+        const match = msg.match(/Load order resolved: (.+)/);
+        if (match) loadOrder.push(...match[1].split(', '));
+      }
+      originalLog(plugin, msg);
+    };
+
+    const loader = new PluginLoader({
+      registryPath,
+      eventBus: new MockEventBus(),
+      stateStore: new MockStateStore(),
+      configManager: new MockConfigManager(),
+      logger
+    });
+
+    await loader.loadAll();
+
+    const baseIndex = loadOrder.indexOf('base-plugin');
+    const providerIndex = loadOrder.indexOf('provider-state-store');
+    const consumerIndex = loadOrder.indexOf('consumer-plugin');
+    assert.ok(baseIndex < consumerIndex, 'base plugin loaded before consumer');
+    assert.ok(providerIndex < consumerIndex, 'provider loaded before consumer');
+
+    // Cleanup
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test('should warn when provider dependency is not satisfied', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-loader-test-'));
+    const registryPath = createTestRegistry(tmpDir, [
+      { name: 'consumer-plugin', type: 'skill', config: { dependencies: { providers: ['provider:nonexistent'] } } }
+    ]);
+
+    const PluginLoader = require('../../plugins/runtime/plugin-loader');
+    const logger = new MockLogger();
+    const loader = new PluginLoader({
+      registryPath,
+      eventBus: new MockEventBus(),
+      stateStore: new MockStateStore(),
+      configManager: new MockConfigManager(),
+      logger
+    });
+
+    // Should not throw, but warn
+    await loader.loadAll();
+
+    const warnLogs = logger.logs.filter(l => l.level === 'warn' && l.msg.includes('which is not provided by any plugin'));
+    assert.ok(warnLogs.length > 0, 'warning logged for unsatisfied provider dependency');
+
+    // Cleanup
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test('should handle multi-level provider dependency chain', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-loader-test-'));
+    // Provider C depends on Provider B, Provider B depends on Provider A
+    const registryPath = createTestRegistry(tmpDir, [
+      { name: 'provider-c', type: 'provider', provides: ['provider:c'], version: '1.0.0', config: { dependencies: { providers: ['provider:b'] } } },
+      { name: 'provider-a', type: 'provider', provides: ['provider:a'], version: '1.0.0' },
+      { name: 'provider-b', type: 'provider', provides: ['provider:b'], version: '1.0.0', config: { dependencies: { providers: ['provider:a'] } } }
+    ]);
+
+    const PluginLoader = require('../../plugins/runtime/plugin-loader');
+    const logger = new MockLogger();
+    const loadOrder = [];
+    const originalLog = logger.info.bind(logger);
+    logger.info = (plugin, msg) => {
+      if (msg.includes('Load order resolved')) {
+        const match = msg.match(/Load order resolved: (.+)/);
+        if (match) loadOrder.push(...match[1].split(', '));
+      }
+      originalLog(plugin, msg);
+    };
+
+    const loader = new PluginLoader({
+      registryPath,
+      eventBus: new MockEventBus(),
+      stateStore: new MockStateStore(),
+      configManager: new MockConfigManager(),
+      logger
+    });
+
+    await loader.loadAll();
+
+    const indexA = loadOrder.indexOf('provider-a');
+    const indexB = loadOrder.indexOf('provider-b');
+    const indexC = loadOrder.indexOf('provider-c');
+    assert.ok(indexA < indexB, 'provider-a loaded before provider-b');
+    assert.ok(indexB < indexC, 'provider-b loaded before provider-c');
+
+    // Cleanup
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test('should register third-party provider and resolve its dependency', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-loader-test-'));
+
+    // Create an external (third-party) provider plugin
+    const externalDir = path.join(tmpDir, 'external-plugins', 'ext-provider');
+    fs.mkdirSync(externalDir, { recursive: true });
+
+    const pluginInterfacePath = path.resolve(__dirname, '../../plugins/contracts/plugin-interface.js').replace(/\\/g, '/');
+
+    fs.writeFileSync(
+      path.join(externalDir, 'plugin.json'),
+      JSON.stringify({
+        name: 'ext-provider',
+        version: '1.0.0',
+        type: 'provider',
+        description: 'Third-party provider',
+        provides: ['provider:ext-service']
+      }, null, 2),
+      'utf-8'
+    );
+
+    fs.writeFileSync(
+      path.join(externalDir, 'index.js'),
+      `'use strict';
+const { ProviderPlugin } = require('${pluginInterfacePath}');
+
+class ExtProvider extends ProviderPlugin {
+  constructor() {
+    super();
+    this.name = 'ext-provider';
+    this.version = '1.0.0';
+  }
+
+  async factory(context) { return { extService: true }; }
+}
+
+module.exports = ExtProvider;
+`,
+      'utf-8'
+    );
+
+    // Create registry with a consumer depending on the third-party provider
+    const registryPath = createTestRegistry(tmpDir, [
+      { name: 'consumer-skill', type: 'skill', config: { dependencies: { providers: ['provider:ext-service'] } } }
+    ]);
+
+    // Add the external provider to the registry
+    const registry = JSON.parse(fs.readFileSync(registryPath, 'utf-8'));
+    registry.plugins.push({
+      name: 'ext-provider',
+      source: externalDir,
+      sourceType: 'local',
+      enabled: true,
+      config: {}
+    });
+    fs.writeFileSync(registryPath, JSON.stringify(registry, null, 2), 'utf-8');
+
+    const PluginLoader = require('../../plugins/runtime/plugin-loader');
+    const logger = new MockLogger();
+    const loadOrder = [];
+    const originalLog = logger.info.bind(logger);
+    logger.info = (plugin, msg) => {
+      if (msg.includes('Load order resolved')) {
+        const match = msg.match(/Load order resolved: (.+)/);
+        if (match) loadOrder.push(...match[1].split(', '));
+      }
+      originalLog(plugin, msg);
+    };
+
+    const loader = new PluginLoader({
+      registryPath,
+      eventBus: new MockEventBus(),
+      stateStore: new MockStateStore(),
+      configManager: new MockConfigManager(),
+      logger
+    });
+
+    const loaded = await loader.loadAll();
+
+    assert.ok(loaded.includes('ext-provider'), 'third-party provider loaded');
+    assert.ok(loaded.includes('consumer-skill'), 'consumer skill loaded');
+
+    const extIndex = loadOrder.indexOf('ext-provider');
+    const consumerIndex = loadOrder.indexOf('consumer-skill');
+    assert.ok(extIndex < consumerIndex, 'third-party provider loaded before consumer');
+
+    // Verify the provider is registered and accessible
+    const provider = loader.getProvider('ext-service');
+    assert.ok(provider, 'third-party provider registered');
+    assert.strictEqual(provider.extService, true, 'factory output correct');
+
+    // Cleanup
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+});

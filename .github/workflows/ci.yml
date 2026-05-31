@@ -6,11 +6,16 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
         node-version: [18, 20]
 
     steps:
@@ -33,3 +38,47 @@ jobs:
 
       - name: Run tests
         run: npm test
+
+      - name: Run E2E tests
+        run: npm run test:e2e
+
+  coverage:
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build plugins
+        run: npm run build
+
+      - name: Run tests with coverage
+        run: npm run test:coverage 2>&1 | tee coverage.txt
+
+      - name: Check coverage threshold (70% line coverage)
+        run: |
+          LINE_COV=$(grep "all files" coverage.txt | awk -F'|' '{print $2}' | tr -d '[:space:]')
+          echo "Line coverage: ${LINE_COV}%"
+          THRESHOLD=70
+          if ! awk "BEGIN { exit !(${LINE_COV} >= ${THRESHOLD}) }"; then
+            echo "::error::Coverage ${LINE_COV}% is below threshold ${THRESHOLD}%"
+            exit 1
+          fi
+          echo "Coverage check passed: ${LINE_COV}% >= ${THRESHOLD}%"
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.txt
+          retention-days: 30

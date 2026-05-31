@@ -4,14 +4,8 @@
 .claude-daemon/
 CLAUDE.md
 
-# Docs (only keep config-reference and best-practices)
+# Docs
 docs/*
-!docs/config-reference.md
-!docs/best-practices.md
-!docs/ai_workflow.md
-!docs/installation.md
-!docs/plugin-development.md
-!docs/daily-workflow-guide.md
 task.md
 
 # Node
@@ -63,6 +57,13 @@ logs/
 # Local Config
 .env
 .local.*
+
+# Secrets
+*.key
+*.pem
+*.secret
+credentials*
+id_rsa*
 
 # Archives
 *.tar.gz

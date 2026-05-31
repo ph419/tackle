@@ -1,6 +1,6 @@
 {
   "name": "skill-watchdog-manager",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "type": "skill",
   "description": "Use when user says \"启动守护进程\", \"watchdog\", \"守护进程状态\", or needs to manage the Watchdog daemon for agent-dispatcher monitoring.",
   "triggers": ["启动守护进程", "watchdog", "守护进程状态", "停止守护进程", "watchdog status", "watchdog start", "watchdog stop"],

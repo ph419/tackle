@@ -27,7 +27,8 @@ var path = require('path');
 // ---------------------------------------------------------------------------
 
 /**
- * Validator execution modes
+ * Validator execution modes.
+ * @public
  */
 var ExecutionMode = {
   BLOCKING: 'blocking',      // Fail on validation error, stop workflow
@@ -35,7 +36,8 @@ var ExecutionMode = {
 };
 
 /**
- * Workflow phases where validators auto-trigger
+ * Workflow phases where validators auto-trigger.
+ * @public
  */
 var WorkflowPhase = {
   BUILD: 'build',             // After `tackle build` completes
@@ -49,6 +51,8 @@ var WorkflowPhase = {
 // ---------------------------------------------------------------------------
 
 /**
+ * ValidatorPipeline constructor.
+ * @public
  * @param {object} options
  * @param {object} options.pluginLoader - PluginLoader instance
  * @param {object} options.eventBus     - EventBus instance
@@ -80,6 +84,7 @@ function ValidatorPipeline(options) {
 /**
  * Run a single validator by name.
  *
+ * @public
  * @param {string} validatorName - registered validator plugin name
  * @param {object} [options]
  * @param {string} [options.mode='blocking'] - ExecutionMode: 'blocking' or 'non-blocking'
@@ -184,6 +189,7 @@ ValidatorPipeline.prototype.runValidator = async function runValidator(validator
 /**
  * Run all registered validators for a specific workflow phase.
  *
+ * @public
  * @param {object} [options]
  * @param {string} [options.phase='manual'] - WorkflowPhase identifier
  * @param {string} [options.mode='blocking'] - Default execution mode (can be overridden per-validator)
@@ -297,6 +303,8 @@ ValidatorPipeline.prototype.runAllValidators = async function runAllValidators(o
  * Run validators specifically for post-build phase.
  * This is a convenience method for the build workflow.
  *
+ * @public
+ *
  * @param {object} [options]
  * @returns {Promise<object>}
  */
@@ -310,6 +318,8 @@ ValidatorPipeline.prototype.runPostBuildValidators = async function runPostBuild
 /**
  * Run validators for WP-related operations.
  * This is a convenience method for WP creation/modification workflow.
+ *
+ * @public
  *
  * @param {string} wpId - Work package ID (e.g., 'WP-001')
  * @param {string} operation - 'create' or 'modify'
@@ -336,6 +346,7 @@ ValidatorPipeline.prototype.runWPValidators = async function runWPValidators(wpI
 
 /**
  * Get cached validator result.
+ * @public
  * @param {string} validatorName
  * @returns {object|undefined}
  */
@@ -345,6 +356,7 @@ ValidatorPipeline.prototype.getCachedResult = function getCachedResult(validator
 
 /**
  * Clear all cached validator results.
+ * @public
  */
 ValidatorPipeline.prototype.clearCache = function clearCache() {
   this._resultsCache.clear();
@@ -357,6 +369,7 @@ ValidatorPipeline.prototype.clearCache = function clearCache() {
 
 /**
  * Set up event listeners for automatic validator triggering.
+ * @internal
  */
 ValidatorPipeline.prototype._setupEventListeners = function _setupEventListeners() {
   if (!this._eventBus) {
@@ -399,6 +412,7 @@ ValidatorPipeline.prototype._setupEventListeners = function _setupEventListeners
  * Filter validators based on workflow phase.
  * Each validator can declare which phases it applies to via metadata.targets or similar.
  *
+ * @internal
  * @param {string[]} validatorNames
  * @param {string} phase
  * @returns {string[]}
@@ -444,15 +458,6 @@ ValidatorPipeline.prototype._filterValidatorsForPhase = function _filterValidato
 ValidatorPipeline.prototype._log = function _log(level, message) {
   if (this._logger && typeof this._logger[level] === 'function') {
     this._logger[level]('validator-pipeline', message);
-  } else {
-    var prefix = '[validator-pipeline] [' + level + ']';
-    if (level === 'error') {
-      console.error(prefix, message);
-    } else if (level === 'warn') {
-      console.warn(prefix, message);
-    } else {
-      console.log(prefix, message);
-    }
   }
 };
 

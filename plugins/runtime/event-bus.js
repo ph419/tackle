@@ -1,6 +1,8 @@
 /**
  * EventBus - Event dispatch system for AI Agent Harness
  *
+ * @module event-bus
+ *
  * Features:
  *   - on(event, handler)    register a listener
  *   - once(event, handler)  one-time listener
@@ -12,8 +14,12 @@
 
 'use strict';
 
+var Logger = require('./logger');
+var logger = new Logger();
+
 class EventBus {
   /**
+   * @public
    * @param {object} [options]
    * @param {number} [options.maxHistory=100] - max event history entries
    */
@@ -31,6 +37,7 @@ class EventBus {
 
   /**
    * Register an event handler.
+   * @public
    * @param {string} event - event name
    * @param {Function} handler - callback(eventData)
    * @returns {{ unsubscribe: Function }} subscription handle
@@ -58,6 +65,7 @@ class EventBus {
 
   /**
    * Register a one-time event handler. Automatically removed after first invocation.
+   * @public
    * @param {string} event
    * @param {Function} handler - callback(eventData)
    * @returns {{ unsubscribe: Function }}
@@ -77,6 +85,7 @@ class EventBus {
 
   /**
    * Unregister a specific handler from an event.
+   * @public
    * @param {string} event
    * @param {Function} handler - the exact function reference originally passed to on()
    */
@@ -92,6 +101,7 @@ class EventBus {
   /**
    * Emit an event, calling all registered handlers synchronously.
    * Errors in individual handlers are caught and logged, not propagated.
+   * @public
    * @param {string} event
    * @param {*} data
    */
@@ -114,16 +124,14 @@ class EventBus {
       try {
         handler(data);
       } catch (err) {
-        console.error(
-          '[EventBus] Error in handler for event "' + event + '":',
-          err.message
-        );
+        logger.error('event-bus', 'Error in handler for event "' + event + '": ' + err.message);
       }
     });
   }
 
   /**
    * Query event history for debugging.
+   * @public
    * @param {object} [filter]
    * @param {string} [filter.event]  - substring match on event name
    * @param {number} [filter.since]  - timestamp lower bound (ms)
@@ -156,6 +164,7 @@ class EventBus {
 
   /**
    * Clear all event history.
+   * @public
    */
   clearHistory() {
     this._history = [];
@@ -163,6 +172,7 @@ class EventBus {
 
   /**
    * Remove all handlers for a specific event, or all events.
+   * @public
    * @param {string} [event] - if omitted, clears all handlers
    */
   removeAllListeners(event) {
@@ -175,6 +185,7 @@ class EventBus {
 
   /**
    * Get the number of handlers registered for a given event.
+   * @public
    * @param {string} event
    * @returns {number}
    */
@@ -185,6 +196,7 @@ class EventBus {
 
   /**
    * Getter for event history (for testing compatibility).
+   * @internal Use getHistory() for public access
    * @returns {object[]}
    */
   get events() {

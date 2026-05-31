@@ -6,12 +6,15 @@
  * - HookPlugin: lifecycle hooks (pre/post tool use)
  * - ValidatorPlugin: output validators
  * - SkillPlugin: executable skills
+ *
+ * @module plugin-interface
  */
 
 'use strict';
 
 /**
- * Plugin lifecycle states
+ * Plugin lifecycle states.
+ * @public
  */
 const PluginState = {
   DISCOVERED: 'discovered',
@@ -24,7 +27,8 @@ const PluginState = {
 };
 
 /**
- * Plugin type constants
+ * Plugin type constants.
+ * @public
  */
 const PluginType = {
   SKILL: 'skill',
@@ -35,6 +39,7 @@ const PluginType = {
 
 /**
  * Base Plugin class. All plugin implementations should extend this.
+ * @public
  *
  * Subclasses must set:
  *   - type {string}       one of PluginType values
@@ -65,6 +70,7 @@ class Plugin {
 
   /**
    * Called when the plugin is activated.
+   * @public
    * @param {PluginContext} context - injected runtime context
    */
   async onActivate(context) {
@@ -73,6 +79,7 @@ class Plugin {
 
   /**
    * Called when the plugin is deactivated.
+   * @public
    */
   async onDeactivate() {
     // default no-op
@@ -80,7 +87,8 @@ class Plugin {
 }
 
 /**
- * SkillPlugin - executable skill plugin
+ * SkillPlugin - executable skill plugin.
+ * @public
  *
  * Additional properties:
  *   - triggers {string[]}     keywords that activate this skill
@@ -101,6 +109,7 @@ class SkillPlugin extends Plugin {
 
   /**
    * Execute the skill.
+   * @public
    * @param {PluginContext} context
    * @param {object} args - skill-specific arguments
    * @returns {Promise<object>} skill result
@@ -111,7 +120,8 @@ class SkillPlugin extends Plugin {
 }
 
 /**
- * HookPlugin - lifecycle hook plugin
+ * HookPlugin - lifecycle hook plugin.
+ * @public
  *
  * Additional properties:
  *   - trigger.event   {'PreToolUse' | 'PostToolUse'}
@@ -131,6 +141,7 @@ class HookPlugin extends Plugin {
 
   /**
    * Handle a hook invocation.
+   * @public
    * @param {object} context - hook context
    * @returns {Promise<{ allowed: boolean, reason?: string, stateChanges?: object[] }>}
    */
@@ -140,7 +151,8 @@ class HookPlugin extends Plugin {
 }
 
 /**
- * ValidatorPlugin - output validation plugin
+ * ValidatorPlugin - output validation plugin.
+ * @public
  *
  * Additional properties:
  *   - targets   {string[]}  skill names this validator checks
@@ -158,6 +170,7 @@ class ValidatorPlugin extends Plugin {
 
   /**
    * Run validation.
+   * @public
    * @param {object} context - validation context
    * @returns {Promise<{ passed: boolean, errors: object[], warnings: object[] }>}
    */
@@ -167,7 +180,8 @@ class ValidatorPlugin extends Plugin {
 }
 
 /**
- * ProviderPlugin - capability provider plugin
+ * ProviderPlugin - capability provider plugin.
+ * @public
  *
  * Additional properties:
  *   - provides {string}  capability identifier
@@ -182,6 +196,7 @@ class ProviderPlugin extends Plugin {
 
   /**
    * Create the provider instance.
+   * @public
    * @param {PluginContext} context
    * @returns {Promise<object>} provider instance
    */
@@ -192,6 +207,7 @@ class ProviderPlugin extends Plugin {
 
 /**
  * PluginContext - injected into every plugin on activation.
+ * @public
  */
 class PluginContext {
   /**
@@ -210,6 +226,7 @@ class PluginContext {
 
   /**
    * Lazily query a provider by name.
+   * @public
    * @param {string} name - provider identifier
    * @returns {Promise<object>}
    */
@@ -224,6 +241,7 @@ class PluginContext {
 
   /**
    * Get another loaded plugin by name.
+   * @public
    * @param {string} name
    * @returns {Plugin|undefined}
    */

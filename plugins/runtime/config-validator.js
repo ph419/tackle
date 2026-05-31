@@ -18,7 +18,7 @@ var fs = require('fs');
 var path = require('path');
 
 /**
- * Schema definition for harness-config.yaml.
+ * Schema definition for harness-config.yaml (loaded from external file).
  * Each field can have:
  *   - type: expected type ('string', 'number', 'boolean', 'object', 'array')
  *   - required: whether the field is required
@@ -27,188 +27,7 @@ var path = require('path');
  *   - properties: nested schema (for objects)
  *   - items: schema for array items
  */
-var CONFIG_SCHEMA = {
-  context_window: {
-    type: 'object',
-    required: false,
-    properties: {
-      max_tokens: { type: 'number', required: false, default: 200000 },
-      safety_margin: { type: 'number', required: false, default: 40000 },
-      chunk_lines: { type: 'number', required: false, default: 500 },
-      strategy: {
-        type: 'string',
-        required: false,
-        default: 'auto',
-        allowedValues: ['auto', 'greedy', 'conservative']
-      },
-      thresholds: {
-        type: 'object',
-        required: false,
-        properties: {
-          small: { type: 'number', required: false, default: 200 },
-          medium: { type: 'number', required: false, default: 800 },
-          large: { type: 'number', required: false, default: 2000 }
-        }
-      }
-    }
-  },
-
-  workflow: {
-    type: 'object',
-    required: false,
-    properties: {
-      default: {
-        type: 'object',
-        required: false,
-        properties: {
-          name: { type: 'string', required: false },
-          description: { type: 'string', required: false },
-          stages: {
-            type: 'array',
-            required: false,
-            items: {
-              type: 'object',
-              properties: {
-                id: { type: 'string', required: true },
-                name: { type: 'string', required: true },
-                description: { type: 'string', required: false },
-                skills: { type: 'array', required: false },
-                auto_advance: { type: 'boolean', required: false, default: false },
-                checkpoint: { type: 'boolean', required: false, default: false }
-              }
-            }
-          },
-          transitions: {
-            type: 'array',
-            required: false,
-            items: {
-              type: 'object',
-              properties: {
-                from: { type: 'string', required: true },
-                to: { type: 'string', required: true },
-                condition: { type: 'string', required: true }
-              }
-            }
-          }
-        }
-      }
-    }
-  },
-
-  roles: {
-    type: 'object',
-    required: false,
-    properties: {
-      roles_dir: { type: 'string', required: false, default: '.claude/agents/roles' },
-      registry_file: { type: 'string', required: false, default: '.claude/agents/role-registry.yaml' },
-      defaults: {
-        type: 'object',
-        required: false,
-        properties: {
-          planner: { type: 'string', required: false, default: 'planner' },
-          implementer: { type: 'string', required: false, default: 'implementer' },
-          reviewer: { type: 'string', required: false, default: 'reviewer' },
-          tester: { type: 'string', required: false, default: 'tester' }
-        }
-      },
-      capabilities: {
-        type: 'object',
-        required: false,
-        // Allow arbitrary structure for capabilities
-      }
-    }
-  },
-
-  memory: {
-    type: 'object',
-    required: false,
-    properties: {
-      storage_dir: { type: 'string', required: false, default: '.claude/agents/memories' },
-      format: {
-        type: 'string',
-        required: false,
-        default: 'yaml',
-        allowedValues: ['yaml', 'json']
-      },
-      auto_extraction: {
-        type: 'object',
-        required: false,
-        properties: {
-          enabled: { type: 'boolean', required: false, default: true },
-          trigger_keywords: {
-            type: 'array',
-            required: false,
-            items: { type: 'string' }
-          },
-          min_confidence: { type: 'number', required: false, default: 0.7 }
-        }
-      },
-      types: {
-        type: 'object',
-        required: false,
-        patternProperties: {
-          '.*': {
-            type: 'object',
-            properties: {
-              enabled: { type: 'boolean', required: false, default: true },
-              max_entries: { type: 'number', required: false }
-            }
-          }
-        }
-      }
-    }
-  },
-
-  mcp: {
-    type: 'object',
-    required: false,
-    properties: {
-      config_dir: { type: 'string', required: false, default: '.claude/mcp/servers' },
-      servers: {
-        type: 'array',
-        required: false,
-        items: {
-          type: 'object',
-          properties: {
-            name: { type: 'string', required: true },
-            type: {
-              type: 'string',
-              required: false,
-              allowedValues: ['stdio', 'http']
-            },
-            enabled: { type: 'boolean', required: false, default: false },
-            command: { type: 'string', required: false },
-            args: { type: 'array', required: false },
-            env: { type: 'object', required: false }
-          }
-        }
-      }
-    }
-  },
-
-  middleware: {
-    type: 'object',
-    required: false,
-    properties: {
-      chain: {
-        type: 'array',
-        required: false,
-        items: { type: 'string' }
-      },
-      config: {
-        type: 'object',
-        required: false
-        // Allow arbitrary middleware config
-      }
-    }
-  },
-
-  overrides: {
-    type: 'object',
-    required: false
-    // Allow arbitrary plugin overrides
-  }
-};
+var CONFIG_SCHEMA = require('../contracts/config-schema.json');
 
 /**
  * Minimal YAML-like parser.
@@ -368,6 +187,7 @@ function parseValue(val) {
 class ConfigValidator {
   /**
    * Create a new validator instance.
+   * @public
    * @param {object} [options]
    * @param {object} [options.schema] - custom schema to use (default: CONFIG_SCHEMA)
    */
@@ -378,6 +198,7 @@ class ConfigValidator {
 
   /**
    * Validate a configuration file.
+   * @public
    * @param {string} configPath - path to harness-config.yaml
    * @returns {{valid: boolean, errors: string[], warnings: string[]}}
    */
@@ -421,6 +242,7 @@ class ConfigValidator {
 
   /**
    * Validate a configuration object.
+   * @public
    * @param {object} config - parsed configuration object
    * @returns {{valid: boolean, errors: string[], warnings: string[]}}
    */
@@ -546,6 +368,7 @@ class ConfigValidator {
 
   /**
    * Get the default configuration object.
+   * @public
    * @returns {object}
    */
   getDefaults() {
