@@ -775,6 +775,114 @@ while (now() - start_time) < max_wait_time:
         # 输出: "异常: 有待处理任务但无活跃 Teamee 且无映射"
         break
 
+    # Phase D2-idle: idle 不执行检测（teamee_map 非空但 Task 长时间未推进）
+    # 与上方 len(teamee_map)==0 分支并列，互不替换。覆盖 WP-181 失效模式：
+    # Teamee 已 spawn 进映射表，但 Task 停在 pending、产物未生成、Teamee idle 不执行。
+    # 此时 len(teamee_map) != 0，原异常分支不触发，监控循环只能 sleep 到超时，
+    # Lead 处于"无指引"状态会被诱导直接接手——本分支禁止此行为（见 HARD-GATE 红线）。
+    #
+    # WP-183-2-impl F1-F4 联动修复：
+    # - F1: idle 产物判定改为弱信号（task 状态文件 last_update 长时间未变 + 无新增 progress_marker），
+    #   因 WP 文档体系当前无"预期产物路径"声明字段（assignment 亦无该字段），引入新字段会扩大
+    #   改动范围且与运行时不符，故降级并标注 TODO。expected_product_path() 伪函数见下方定义。
+    # - F2: idle 计时起点从任务状态文件 read_task_file(task_id)["started_at"] 读取——TaskList 的
+    #   task 对象无 assigned_at/started_at 字段，原 fallback 链 task.assigned_at 恒 None。
+    # - F3: 催促去重位 idle_nudge_sent（任务状态文件），Step 1 前检查，已催促则跳过直接进 Step 2-3。
+    # - F4: 重 spawn 后 update_task_file(reset_started_at=True) 刷新 started_at + 重置 idle_nudge_sent，
+    #   新 Teamee 获得完整 idle_threshold 窗口。F3+F4 联动才能阻断"spawn 即判定 idle→每轮自愈→熔断"死亡螺旋。
+    idle_threshold = loop_interval * 2  # 建议取 loop_interval 的 2-3 倍或显式配置项
+    for task_id, teamee_name in list(teamee_map.items()):
+        task = find_by_id(tasks, task_id)
+        if task is None:
+            continue
+        # 双验证：TaskList（status 仍 pending/in_progress 未推进）+ 产物/进度弱信号
+        # 不只看 idle_notification（后者仅表示轮次结束，不代表做了任何工作）。
+        task_file = read_task_file(task_id)  # F2: 权威时间源来自任务状态文件，非 TaskList task 对象
+        product_exists = Glob(expected_product_path(task))  # F1: 预期产物路径，见下方函数定义（无声明时返回 None 触发弱信号）
+        task_stalled = task.status in ("pending", "in_progress") and not product_exists
+        # F2: idle 计时起点 = 任务状态文件 started_at（TaskList task 对象无此字段）。
+        # 缺失时回退到 last_update，再缺失回退到 start_time（监控循环起点）。
+        assigned_at = task_file.get("started_at") or task_file.get("last_update") or start_time
+        # F3 去重位：本 idle 窗口内是否已催促过（重 spawn 后由 Step 4 重置）
+        idle_nudge_sent = task_file.get("idle_nudge_sent", False)
+        if task_stalled and (now() - assigned_at) >= idle_threshold:
+            # ── 状态输出（直接文本输出，禁止使用 SendMessage）──
+            # 输出: "⚠️ idle 检测: Teamee {teamee_name} (task {task_id}) 停滞 {idle_seconds}s 未推进产物，进入自愈流程"
+            # 进入自愈流程（Phase D2-idle-heal），绝不 Lead 接手
+            # ---- Phase D2-idle-heal: 自愈流程 ----
+            # Step 1: ≤1 次 SendMessage 催促验证（不空转多次催促，催促无效即认定失效）
+            # F3 去重 + 催促生效窗口：本 idle 窗口内仅催促一次，催促后给 Teamee 至少一个
+            # idle_threshold 窗口响应——首轮只催促（设 idle_nudge_sent=True）并结束本轮自愈，
+            # 不立即重 spawn；下一轮若仍 idle 且已催促，才跳过催促进入 Step 2-4 重 spawn。
+            # 缺失去重位/催促窗口会导致每轮重复催促 + 立即重 spawn，数轮内耗尽 max_retries 熔断。
+            if not idle_nudge_sent:
+                SendMessage(
+                    to=teamee_name,
+                    summary="idle 检测催促，请立即执行任务",
+                    message=f"检测到任务 {task_id} 长时间未推进。请立即开始执行 WP 文档中的任务，完成后用 SendMessage 向 team-lead 发送完成报告。"
+                )
+                update_task_file(task_id, set_idle_nudge=True)  # F3: 标记本窗口已催促
+                # ── 状态输出（直接文本输出，禁止使用 SendMessage）──
+                # 输出: "idle 自愈: task {task_id} 首轮催促已发，给 Teamee 一个 idle_threshold 窗口响应，本轮不重 spawn"
+                continue  # 结束本轮自愈，下一轮若仍 idle 且已催促才进 Step 2-4
+            # ── 状态输出（直接文本输出，禁止使用 SendMessage）──
+            # 输出: "idle 自愈: task {task_id} 本窗口已催促过仍无推进，跳过催促直接进 Step 2-4 重 spawn"
+            # Step 2: 验证 spawn 参数（定位根因，避免原样重 spawn 仍 idle）
+            assignment = wp_assignments[task_id]
+            spawn_params_ok = (
+                assignment.subagent_type == "general-purpose"
+                and assignment.team_name == team_name
+                and task_id in assignment.prompt
+                and assignment.wp_doc_path in assignment.prompt
+                and "SendMessage" in assignment.prompt  # prompt 须要求完成报告用 SendMessage
+            )
+            if not spawn_params_ok:
+                # ── 状态输出（直接文本输出，禁止使用 SendMessage）──
+                # 输出: "spawn 参数异常 (subagent_type/team_name/prompt 完整性)，将在重 spawn 时修正"
+                pass
+            # Step 3: 仍不执行 → 逻辑销毁旧 Teamee（无协议帧）
+            markTeameeDestroyed(teamee_map, task_id)
+            # Step 4: 检查 retry_count < max_retries → 重新 spawn（复用 636-710 restart 重 spawn 逻辑）
+            # 复用 idle 检测顶部已读取的 task_file（read_task_file 结果），避免重复 IO
+            retry_count = task_file.get("retry_count", 0)
+            max_retries = task_file.get("max_retries", 3)
+            if retry_count < max_retries:
+                # 重新 spawn 专用 Teamee（递增 retry_count），复用 restart 守护进程指令段的重 spawn 逻辑
+                new_teamee_name = f"{assignment.role_id}-t{task_id}-idle-retry"
+                prompt = build_refine_prompt(
+                    teamee_name=new_teamee_name,
+                    task_id=task_id,
+                    role_prompt=assignment.role_prompt,
+                    memories=assignment.memories,
+                    wp_doc_path=assignment.wp_doc_path,
+                    failing_drivers=[]  # idle 重 spawn 非失败项修复，failing_drivers 为空
+                )
+                Agent(
+                    name=new_teamee_name,
+                    team_name="{team_name}",
+                    subagent_type="general-purpose",
+                    prompt=prompt
+                )
+                teamee_map[task_id] = new_teamee_name
+                # F3+F4 联动：递增 retry_count + 刷新 started_at（F4，新 Teamee 获得完整 idle_threshold 窗口）
+                # + 重置 idle_nudge_sent=False（F3，新 Teamee 重新获得一次催促机会）。
+                # 单独刷新 started_at 而不重置去重位 → 新窗口仍无法催促；单独重置去重位而不刷新 started_at
+                # → 新 Teamee 一出生即满足 idle 阈值又被判定 idle。两者必须同一次调用完成（阻断死亡螺旋）。
+                update_task_file(
+                    task_id,
+                    increment_retry=True,
+                    reset_started_at=True,   # F4
+                    set_idle_nudge=False      # F3
+                )
+                # ── 状态输出（直接文本输出，禁止使用 SendMessage）──
+                # 输出: "idle 自愈: task {task_id} 重新 spawn 为 {new_teamee_name} (retry {retry_count+1}/{max_retries})，已刷新 started_at + 重置催促去重位"
+            else:
+                # Step 5: 超限 → 熔断，绝不 Lead 接手，转 Step 7 清理
+                TaskUpdate(taskId=task_id, status="failed")
+                update_task_file(task_id, status="failed")
+                # ── 状态输出（直接文本输出，禁止使用 SendMessage）──
+                # 输出: "🔴 idle 自愈超限: task {task_id} 重试 {retry_count}/{max_retries} 仍 idle，熔断标记 failed，绝不 Lead 接手，转 Step 7 清理"
+
     # Phase D3: 批次自动加载 — 当前批次全部完成后从 pending_batches 加载下一批
     if current_batch and len(teamee_map) == 0:
         batch_completed = all(
@@ -951,6 +1059,7 @@ def create_task_file(task_id, wp_id, teamee_name, status, complexity_score):
         "retry_count": 0,
         "max_retries": 3,
         "retry_history": [],
+        "idle_nudge_sent": False,  # idle 催促去重位（WP-183-2-impl F3）：本 idle 窗口内是否已催促过，重 spawn 后由 update_task_file(reset_started_at=True) 顺带重置
         "started_at": now_iso8601(),
         "last_update": now_iso8601()
     }
@@ -961,11 +1070,20 @@ def create_task_file(task_id, wp_id, teamee_name, status, complexity_score):
 ```
 
 #### update_task_file()
-更新任务状态文件，支持状态更新、追加进度标记、递增重试计数。
+更新任务状态文件，支持状态更新、追加进度标记、递增重试计数、刷新 idle 计时起点、设置/重置 idle 催促去重位。
 
 ```
-def update_task_file(task_id, status=None, increment_retry=False, append_marker=None):
-    """更新任务状态文件"""
+def update_task_file(task_id, status=None, increment_retry=False, append_marker=None,
+                     reset_started_at=False, set_idle_nudge=None):
+    """更新任务状态文件
+
+    扩展参数（idle 自愈流程，WP-183-2-impl F3/F4 修复）：
+    - reset_started_at: 重 spawn 后刷新 started_at 为 now_iso8601()，
+      使新 Teamee 获得完整 idle_threshold 执行窗口，避免一出生即满足 idle 阈值（F4）。
+      TaskList task 对象不携带时间字段，started_at 是 idle 计时的权威起点（见 F2）。
+    - set_idle_nudge: True/False。True=记录本轮已催促（去重位），
+      False=重 spawn 后重置为未催促，让新 Teamee 有一次催促机会（F3）。
+    """
     task_path = f".claude-daemon/tasks/task-{task_id}.json"
     existing_data = Read(file_path=task_path)
     try:
@@ -995,9 +1113,59 @@ def update_task_file(task_id, status=None, increment_retry=False, append_marker=
             "detail": append_marker.get("detail", "")
         })
 
+    # 刷新 idle 计时起点（F4）：重 spawn 后让新 Teamee 重新获得 idle_threshold 窗口
+    if reset_started_at:
+        task_data["started_at"] = now_iso8601()
+
+    # 设置/重置 idle 催促去重位（F3）：True=已催促本窗口，False=重 spawn 后清位
+    if set_idle_nudge is not None:
+        task_data["idle_nudge_sent"] = bool(set_idle_nudge)
+
     task_data["last_update"] = now_iso8601()
     Write(file_path=task_path, content=json_dumps(task_data, indent=2))
 ```
+
+#### read_task_file()
+读取任务状态文件并解析为 dict（供 idle 检测读取 `started_at`/`idle_nudge_sent` 等权威字段）。
+TaskList 返回的 task 对象不携带 `assigned_at`/`started_at` 等时间字段，idle 计时起点
+必须从任务状态文件读取（WP-183-2-impl F2 修复）。
+
+```
+def read_task_file(task_id):
+    """读取任务状态文件，返回 dict；文件不存在/解析失败返回 {}"""
+    task_path = f".claude-daemon/tasks/task-{task_id}.json"
+    if not file_exists(task_path):
+        return {}
+    try:
+        return json_loads(Read(file_path=task_path))
+    except Exception:
+        return {}
+```
+
+#### expected_product_path()
+返回 task 的预期产物路径，供 idle 检测的 `Glob(expected_product_path(task))` 判定产物是否已生成。
+**WP-183-2-impl F1 修复**：WP 文档体系当前无"预期产物路径"声明字段，assignment 对象亦无该字段，
+故此处降级为弱信号——返回 None 时，idle 检测的 `not product_exists` 恒为 True，产物判定退化为
+"task 状态文件 `last_update` 长时间未变 + 无新增 progress_marker"（由 assigned_at 比对 idle_threshold 体现）。
+
+TODO（后续 WP）：若 WP 文档体系引入产物路径声明（如 assignment.expected_products 或 WP 文档
+`预期产物:` 列表），将本函数改为从该字段返回 Glob 路径，使 idle 检测升级为强信号产物判定。
+
+```
+def expected_product_path(task):
+    """返回 task 的预期产物路径；WP 文档体系暂无产物路径声明字段，降级返回 None（弱信号，F1）
+
+    降级理由：assignment 对象（role_id/role_prompt/memories/wp_doc_path/complexity_score/
+    subagent_type/team_name/prompt）与 WP 文档当前均无产物路径字段，引入新字段需扩大改动范围
+    且与运行时不符。返回 None 时 Glob 调用方应将 product_exists 视为"未知→按停滞判定"。
+    """
+    # TODO: WP 文档体系引入产物路径声明后，从 assignment.expected_products 或 WP 文档读取
+    return None
+```
+
+> **调用方约定（idle 检测段）**：`expected_product_path(task)` 返回 None 时，idle 段不依赖
+> `Glob` 的返回值判定产物存在性，而是退化为时间+进度弱信号（`task_stalled` 中
+> `not product_exists` 对 None 结果恒 True，故停滞判定仅依赖 status 与时间阈值）。
 
 #### build_resume_prompt()
 为复杂任务的 checkpoint_resume 重启策略构建 prompt，注入已完成文件上下文 + 失败项重点修复段（refine 通道，WP-176-6）。
@@ -1294,3 +1462,21 @@ docs/reports/{YYYY-MM-DD}_{工作包列表}_execution_report.md
 8. **🔴 TeamDelete 是强制的** - 无论成功/失败/超时，都必须执行清理！(由 team-cleanup CLI 封装：先试 TeamDelete，失败回退文件系统删除)
 9. **🔴 监控循环不可跳过** - Lead 必须进入 Step 6.5 监控循环，负责动态创建和即时销毁
 10. **🔴 文件冲突不得触发合并** - 即使多个 WP 修改同一文件，也必须每 WP 一个 Teamee。blockedBy 依赖只以 WP 文档声明为准，禁止自行添加隐式依赖
+
+---
+
+<HARD-GATE>
+🔴 Lead 禁止直接接手执行 WP 内容（绝对红线，无任何例外）
+
+无论任务多轻量、素材多齐备、是否线性链、有无并行收益，Lead 不得直接
+写 WP 产物（代码/文档/报告）。Teamee spawn 成功但 idle 不执行时，只能
+在 Teamee 机制内处理：
+  - Phase D2-idle 检测触发 → ≤1 次 SendMessage 催促 → 排查 spawn 参数
+    → markTeameeDestroyed + retry_count < max_retries 时重新 spawn
+    → 超限熔断 TaskUpdate(status="failed")
+  - 绝不 fallback 到 Lead 自己写产物（无任何 Lead 接手分支）
+
+WP-181 的 Lead 接手完成是被用户明确否决的反例，不得作为先例引用。
+依据：记忆 teamee-spawn-idle-no-execution（"绝对禁止 Lead 接手"）、
+      记忆 teamee-report-needs-sendmessage（Teamee 报告须用 SendMessage）
+</HARD-GATE>

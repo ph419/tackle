@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.5] - 2026-06-18
+
+### Fixed
+
+- **agent-dispatcher idle 自愈死亡螺旋修复**（WP-183，skill-agent-dispatcher 1.1.0 → 1.2.0）：修复 WP-182 引入的 idle 不执行检测 4 个逻辑缺口（F1-F4），其中 F3+F4 叠加形成「spawn 即判定 idle → 每轮自愈重 spawn → 瞬间熔断」死亡螺旋：
+  - **F1**：idle 产物判定降级为弱信号——新增 `expected_product_path()` 伪函数，WP 文档体系暂无产物路径声明字段（assignment 亦无），返回 None 触发弱信号并标注 TODO（后续 WP 引入产物声明后升级为强信号）
+  - **F2**：idle 计时起点改为从任务状态文件读取 `started_at`——新增 `read_task_file()`，原 fallback 链 `task.assigned_at` 因 TaskList task 对象无此字段恒为 None
+  - **F3**：新增催促去重位 `idle_nudge_sent`（任务状态文件），首轮只 SendMessage 催促并给一个 `idle_threshold` 响应窗口、不立即重 spawn；下一轮仍 idle 且已催促才进重 spawn，阻断每轮重复催促 + 立即重 spawn 耗尽 `max_retries`
+  - **F4**：重 spawn 时 `update_task_file(reset_started_at=True)` 一次调用同时刷新 `started_at` + 重置 `idle_nudge_sent=False` + 递增 `retry_count`，使新 Teamee 获得完整 idle_threshold 窗口；F3+F4 联动阻断死亡螺旋，`retry_count` 仅真正重 spawn 递增、`max_retries=3` 对应最多 3 次重 spawn
+
+### Verified
+
+- npm test 1349/0 零回归，build/validate 26 plugins 0 错误 0 警告，review 6 维度全 PASS
+
 ## [0.3.4] - 2026-06-16
 
 ### Added
@@ -425,6 +439,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 插件注册表 (`plugin-registry.json`)
 - 运行时层：harness-build、plugin-loader、event-bus、state-store、config-manager、logger
 
+[0.3.5]: https://github.com/ph419/tackle/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/ph419/tackle/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/ph419/tackle/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/ph419/tackle/compare/v0.3.1...v0.3.2
