@@ -182,33 +182,42 @@ function assertWithinRepo(resolved, repoRoot, pluginName) {
  * 调用方 isAbsolutePath 提前分流，不经过本函数。
  *
  * 语义与 assertWithinRepo 对齐：repoRoot = registryDir 的父目录，故相对 registryDir
- * 允许上爬至多 1 级（到达 repoRoot 本身或其下的同级目录）。净深度 > 1 即逃逸 repoRoot。
- * 净深度 = '..' 段数 - 非 '.'/'..' 的下钻段数（'.' 段不计）。
+ * 允许上爬至多 1 级（到达 repoRoot 本身或其下的同级目录）。瞬时深度低于 repoRoot
+ * （< -1）即逃逸 repoRoot。
  *
- * 例：
- *   '../custom-plugins/my-plugin' → 1 个 '..'，1 个下钻 → 净 0 → 允许（同级目录）
- *   '../../etc/passwd'             → 2 个 '..' → 净 2 → 拒绝
- *   '..\\..\\Windows\\System32'    → 2 个 '..'，1 个下钻 → 净 1 → 拒绝（>1）
+ * 必须用「扫描过程中的最小瞬时深度」而非「最终净深度」判定：一旦 `..` 把路径带到
+ * repoRoot 之上，后续下钻段只会从那个外部点继续往下走，并不能把路径拉回 repoRoot 之内。
+ * 净深度算法会被 `..\..\Windows\System32` 这类「先上爬再下钻」构造中和为 0 而漏判
+ * （CI 回归：POSIX 主机红、Windows 主机靠 assertWithinRepo 兜底而绿）。
+ *
+ * 例（min 深度 = 扫描过程中相对 registryDir 的最小瞬时深度，repoRoot = -1）：
+ *   '../custom-plugins/my-plugin' → min -1（恰达 repoRoot）→ 允许（同级目录）
+ *   '../../etc/passwd'             → min -2 → 拒绝
+ *   '..\\..\\Windows\\System32'    → min -2（先上爬出 repoRoot 再下钻，仍属逃逸）→ 拒绝
  *
  * @internal
  * @param {string} source 待检测的相对 source 串
- * @returns {boolean} true 表示该 source 净上爬深度 > 1，会逃逸 repoRoot
+ * @returns {boolean} true 表示该 source 扫描过程中瞬时深度低于 repoRoot（< -1），即逃逸 repoRoot
  */
 function sourceEscapesRepoRoot(source) {
   if (typeof source !== 'string' || source === '') return false;
   // 同时按两种分隔符切分，兼容跨平台 registry（Windows 风格 source 在 POSIX 主机上）。
   var segs = source.split(/[\\/]/);
-  var netUp = 0;
+  // depth = 相对 registryDir 的瞬时深度（registryDir 自身 = 0，repoRoot = -1）。
+  // 记录扫描过程中的最小值；后续下钻段无法抵消已经发生的上爬逃逸。
+  var depth = 0;
+  var minDepth = 0;
   for (var i = 0; i < segs.length; i++) {
     var s = segs[i];
     if (s === '..') {
-      netUp += 1;
+      depth -= 1;
+      if (depth < minDepth) minDepth = depth;
     } else if (s !== '' && s !== '.') {
-      netUp -= 1;
+      depth += 1;
     }
   }
-  // repoRoot 是 registryDir 的父目录；相对 registryDir 上爬 > 1 级即逃出 repoRoot。
-  return netUp > 1;
+  // repoRoot 是 registryDir 的父目录（深度 -1）；瞬时深度 < -1 即逃出 repoRoot。
+  return minDepth < -1;
 }
 
 /**
@@ -281,5 +290,8 @@ function findPackageRoot(startPath) {
 module.exports = {
   resolvePluginPath: resolvePluginPath,
   resolveNpmPath: resolveNpmPath,
-  VALID_SOURCE_TYPES: VALID_SOURCE_TYPES
+  VALID_SOURCE_TYPES: VALID_SOURCE_TYPES,
+  // 导出纯函数字面层守卫，便于跨平台单测覆盖（Windows 主机上 path.resolve 兜底会掩盖
+  // 该函数的语义回归，故必须直接单测）。仅用于测试，非公开 API。
+  sourceEscapesRepoRoot: sourceEscapesRepoRoot
 };
