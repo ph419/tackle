@@ -10,7 +10,7 @@ const assert = require('node:assert');
 const path = require('path');
 const os = require('os');
 
-const { resolvePluginPath } = require('../../plugins/runtime/resolve-plugin-path');
+const { resolvePluginPath, sourceEscapesRepoRoot } = require('../../plugins/runtime/resolve-plugin-path');
 
 test.describe('resolvePluginPath - core default path', () => {
   test('should resolve core plugin by name', () => {
@@ -360,6 +360,47 @@ test.describe('resolvePluginPath - S3 path traversal rejection', () => {
       ),
       /escapes the repository root/
     );
+  });
+});
+
+test.describe('sourceEscapesRepoRoot - 字面层穿越守卫（跨平台纯函数）', () => {
+  // 直接单测字面层守卫，不依赖 path.resolve 的平台行为：Windows 主机上
+  // path.resolve 认识反斜杠，会由 assertWithinRepo 兜底通过，从而掩盖本函数的
+  // 语义回归（这正是「Windows 本地绿、POSIX CI 红」盲区的成因），故必须独立覆盖。
+  test('同级目录相对路径不逃逸', () => {
+    assert.strictEqual(sourceEscapesRepoRoot('../custom-plugins/my-plugin'), false);
+  });
+
+  test('上爬一级到 repoRoot 边界不逃逸', () => {
+    assert.strictEqual(sourceEscapesRepoRoot('..'), false);
+    assert.strictEqual(sourceEscapesRepoRoot('../'), false);
+  });
+
+  test('上爬超过 repoRoot 即逃逸', () => {
+    assert.strictEqual(sourceEscapesRepoRoot('../../etc/passwd'), true);
+    assert.strictEqual(sourceEscapesRepoRoot('../foo/../../../etc'), true);
+  });
+
+  test('Windows 风格 .. 逃逸（POSIX 主机关键用例，净深度盲点）', () => {
+    // 先上爬出 repoRoot 再下钻：后续 Windows/System32 段不能抵消已经发生的逃逸。
+    assert.strictEqual(sourceEscapesRepoRoot('..\\..\\Windows\\System32'), true);
+    assert.strictEqual(sourceEscapesRepoRoot('..\\..\\..\\etc'), true);
+  });
+
+  test('先上爬再下钻回 repoRoot 之内仍判逃逸（保守安全语义）', () => {
+    // `../../a/b` 已把路径带到 repoRoot 之上，最终落在 repoRoot 之外，故仍逃逸。
+    assert.strictEqual(sourceEscapesRepoRoot('../../a/b'), true);
+  });
+
+  test('纯下钻不逃逸', () => {
+    assert.strictEqual(sourceEscapesRepoRoot('foo/bar'), false);
+    assert.strictEqual(sourceEscapesRepoRoot('foo\\bar\\baz'), false);
+  });
+
+  test('空/非字符串输入不逃逸', () => {
+    assert.strictEqual(sourceEscapesRepoRoot(''), false);
+    assert.strictEqual(sourceEscapesRepoRoot(null), false);
+    assert.strictEqual(sourceEscapesRepoRoot(undefined), false);
   });
 });
 
