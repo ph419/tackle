@@ -27,12 +27,18 @@ module.exports = {
     var projectRegistryPath = path.join(ctx.targetRoot, '.claude', 'plugin-registry.json');
 
     // Warn if trying to modify global registry from project directory
-    if (ctx.targetRoot !== ctx.packageRoot && ctx.targetRoot.indexOf(path.join(ctx.packageRoot, '..')) !== 0) {
+    // B17/S6: use isWithin for correct path containment (was indexOf===0) and
+    // explicit parens on the OR/AND precedence (was a || b && c — readable but
+    // relies on implicit precedence).
+    var safePath = require('../../plugins/runtime/safe-path');
+    if (ctx.targetRoot !== ctx.packageRoot && !safePath.isWithin(path.join(ctx.packageRoot, '..'), ctx.targetRoot)) {
       var settingsPath = ctx.settingsPath;
       if (fs.existsSync(settingsPath)) {
         try {
           var settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
-          if (settings.globalRegistry || settings.hooks && settings.hooks.global) {
+          var hasGlobalRegistration = settings.globalRegistry ||
+            (settings.hooks && settings.hooks.global);
+          if (hasGlobalRegistration) {
             console.warn(ctx.colorize('[tackle-harness] Warning: Interactive mode should not modify global registry.', 'yellow'));
             console.warn(ctx.colorize('[tackle-harness] Use project manifest (.claude/harness-manifest.json) for project-specific overrides.', 'yellow'));
             console.warn(ctx.colorize('[tackle-harness] Global registry is managed by npm install -g tackle-harness', 'yellow'));

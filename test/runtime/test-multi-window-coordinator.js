@@ -350,6 +350,23 @@ test.describe('aggregateSingleWindow', function () {
     assert.strictEqual(entry.status, 'disconnected');
     assert.strictEqual(entry.heartbeat, null);
   });
+
+  test('B11: malformed/missing last_update (NaN age) → disconnected, not active', function () {
+    // B7/B11: a heartbeat with missing/garbage last_update yields NaN age.
+    // NaN > THRESHOLD is false, so without the guard the window was
+    // misclassified as alive. Verify each malformed shape → disconnected.
+    var cases = [
+      { label: 'missing last_update', hb: { in_progress_tasks: 1 } },
+      { label: 'null last_update', hb: { last_update: null, in_progress_tasks: 1 } },
+      { label: 'garbage last_update', hb: { last_update: 'not-a-date', in_progress_tasks: 1 } },
+      { label: 'undefined last_update', hb: { last_update: undefined, in_progress_tasks: 1 } },
+    ];
+    for (var i = 0; i < cases.length; i++) {
+      var entry = coordinator.aggregateSingleWindow('win-bad', null, cases[i].hb);
+      assert.strictEqual(entry.status, 'disconnected',
+        'B11: ' + cases[i].label + ' must be disconnected, got ' + entry.status);
+    }
+  });
 });
 
 test.describe('computeSessionStatus', function () {

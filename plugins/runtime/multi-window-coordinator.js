@@ -222,10 +222,14 @@ function aggregateSingleWindow(winId, state, heartbeat) {
   var error = null;
 
   if (heartbeat) {
-    var heartbeatAge = Date.now() - new Date(heartbeat.last_update).getTime();
+    var lastUpdateMs = new Date(heartbeat.last_update).getTime();
+    var heartbeatAge = Date.now() - lastUpdateMs;
     var STALE_THRESHOLD_MS = 120000; // 2 minutes
 
-    if (heartbeatAge > STALE_THRESHOLD_MS) {
+    // B11: a malformed/missing last_update yields NaN age. NaN > THRESHOLD is
+    // false, so without this guard the window would be misclassified as
+    // alive. Treat NaN age as disconnected (safest — we have no valid signal).
+    if (isNaN(heartbeatAge) || heartbeatAge > STALE_THRESHOLD_MS) {
       windowStatus = 'disconnected';
     } else if (heartbeat.status === 'completed') {
       windowStatus = 'completed';

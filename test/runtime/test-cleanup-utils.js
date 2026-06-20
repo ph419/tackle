@@ -450,6 +450,43 @@ test.describe('cleanupProjectSkills', function () {
     }
   });
 
+  // S5 回归：skills 目录下的符号链接不应被递归删除（避免误删链接目标）
+  test('S5: 不删除符号链接 skill（保护链接目标）', function () {
+    var pkg = createTestPackage({
+      corePlugins: [
+        { name: 'skill-task-creator', version: '1.0.0', type: 'skill', description: 'Task creator' },
+      ],
+      plugins: [
+        { name: 'skill-task-creator' },
+      ],
+    });
+
+    try {
+      // 创建一个真实目录作为符号链接的目标，里面放重要文件
+      var preciousDir = path.join(pkg.tmpDir, 'precious');
+      fs.mkdirSync(preciousDir, { recursive: true });
+      fs.writeFileSync(path.join(preciousDir, 'important.txt'), 'DO NOT DELETE');
+
+      // 尝试在 skills 目录下建符号链接 skill-task-creator → precious
+      var linkPath = path.join(pkg.skillsDir, 'skill-task-creator');
+      try {
+        fs.symlinkSync(preciousDir, linkPath, 'dir');
+      } catch (_e) {
+        // 无权限建符号链接（部分 CI / 无特权 Windows）→ 跳过该断言
+        return;
+      }
+
+      var removed = cleanupUtils.cleanupProjectSkills(pkg.skillsDir, pkg.registryPath, pkg.packageRoot);
+      // 关键：不应把符号链接当作可清理项
+      assert.strictEqual(removed.length, 0, '符号链接 skill 不应被清理');
+      // 链接目标内容必须完好
+      assert.strictEqual(fs.existsSync(path.join(preciousDir, 'important.txt')), true, '符号链接目标必须保留');
+      assert.strictEqual(fs.readFileSync(path.join(preciousDir, 'important.txt'), 'utf-8'), 'DO NOT DELETE');
+    } finally {
+      pkg.cleanup();
+    }
+  });
+
 });
 
 // ---------------------------------------------------------------------------

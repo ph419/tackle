@@ -679,7 +679,9 @@ HarnessBuild.prototype._formatBuildSummary = function _formatBuildSummary(result
  * @returns {boolean}
  */
 HarnessBuild.prototype._hasFrontMatter = function _hasFrontMatter(content) {
-  return content.trimLeft().indexOf('---') === 0;
+  // B13: trimLeft is deprecated (alias of trimStart); use trimStart for
+  // forward compatibility with strict mode / future Node versions.
+  return String(content).trimStart().indexOf('---') === 0;
 };
 
 /**
@@ -844,6 +846,14 @@ HarnessBuild.prototype._injectContextConfig = function _injectContextConfig(cont
     // Apply per-plugin override if exists (only for context_window)
     if (config.overrides && config.overrides[pluginName] && relevantConfig === config.context_window) {
       var override = config.overrides[pluginName];
+      // B6: shallow-clone the shared config.context_window before applying the
+      // override so this plugin's override does NOT leak into subsequent skills
+      // (the previous code wrote directly onto the shared reference).
+      relevantConfig = {};
+      var _ck = Object.keys(config.context_window);
+      for (var _ci = 0; _ci < _ck.length; _ci++) {
+        relevantConfig[_ck[_ci]] = config.context_window[_ck[_ci]];
+      }
       for (var k in override) {
         if (override.hasOwnProperty(k)) {
           relevantConfig[k] = override[k];

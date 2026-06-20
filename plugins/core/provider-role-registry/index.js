@@ -21,127 +21,24 @@ var fs = require('fs');
 var { ProviderPlugin } = require('../../contracts/plugin-interface');
 
 /**
- * Minimal YAML parser for flat and simple nested structures.
- * Handles: key: value, nested via indentation, list items via "- ", comments via #.
- * Returns a plain JS object.
+ * Minimal YAML parser — S8/A3 consolidated.
+ *
+ * Delegates to the shared `yaml-parser.parseSimpleYaml`. Previously this
+ * module had its own divergent copy (with a buggy list-of-objects branch and
+ * no size/depth guards). The shared parser also fixes B4 (top-level scalar
+ * arrays now parse correctly, which matters because role files use lists for
+ * expertise/keywords/task_types).
+ * @param {string} content
+ * @returns {object}
  */
 function parseSimpleYaml(content) {
-  var lines = content.split('\n');
-  var root = {};
-  var stack = [{ obj: root, indent: -1 }];
-
-  for (var i = 0; i < lines.length; i++) {
-    var rawLine = lines[i];
-
-    // Strip comments (but not inside quoted strings - simple approach)
-    var commentIdx = rawLine.indexOf('#');
-    if (commentIdx === 0) continue; // full-line comment
-    var line = commentIdx > 0 ? rawLine.substring(0, commentIdx) : rawLine;
-    line = line.replace(/\s+$/, ''); // trim trailing whitespace
-
-    if (!line) continue;
-
-    // Calculate indentation
-    var indent = 0;
-    while (indent < line.length && (line[indent] === ' ' || line[indent] === '\t')) {
-      indent++;
-    }
-
-    // Pop stack to find the correct parent
-    while (stack.length > 1 && stack[stack.length - 1].indent >= indent) {
-      stack.pop();
-    }
-    var parent = stack[stack.length - 1].obj;
-
-    // List item
-    if (line.indexOf('- ', indent) === indent) {
-      var value = line.substring(indent + 2).trim();
-      // value could be "key: val" format in a list
-      var kvMatch = value.match(/^(\S+):\s*(.*)$/);
-      if (kvMatch && parent && typeof parent === 'object' && !Array.isArray(parent)) {
-        // If parent is not an array, this is a list of objects that should
-        // be converted - but we handle list items as array entries
-        if (!Array.isArray(parent)) {
-          // We need the grandparent to have the array
-          // Skip complex list-of-objects for role files
-        }
-      }
-      // Determine parent array
-      // The key name should be on the previous stack entry
-      var listValue = parseYamlValue(value);
-      // Ensure parent is the array
-      if (Array.isArray(parent)) {
-        parent.push(listValue);
-      }
-      continue;
-    }
-
-    // Key-value pair
-    var colonIdx = line.indexOf(':', indent);
-    if (colonIdx === -1) continue;
-
-    var key = line.substring(indent, colonIdx).trim();
-    var val = line.substring(colonIdx + 1).trim();
-
-    if (!val) {
-      // Nested structure - check if next non-empty line is a list
-      var nextNonEmpty = findNextNonEmpty(lines, i + 1);
-      if (nextNonEmpty && nextNonEmpty.line.indexOf('- ', nextNonEmpty.indent) === nextNonEmpty.indent) {
-        // It's a list
-        var arr = [];
-        parent[key] = arr;
-        stack.push({ obj: arr, indent: indent });
-      } else {
-        // It's an object
-        var newObj = {};
-        parent[key] = newObj;
-        stack.push({ obj: newObj, indent: indent });
-      }
-    } else {
-      parent[key] = parseYamlValue(val);
-    }
+  var sharedParser = require('../../runtime/yaml-parser');
+  try {
+    return sharedParser.parseSimpleYaml(content);
+  } catch (_e) {
+    // Oversize / over-depth → empty config (preserve non-throwing behavior)
+    return {};
   }
-
-  return root;
-}
-
-/**
- * Parse a YAML scalar value.
- */
-function parseYamlValue(val) {
-  if (!val) return val;
-
-  // Quoted string
-  if ((val[0] === '"' && val[val.length - 1] === '"') ||
-      (val[0] === "'" && val[val.length - 1] === "'")) {
-    return val.substring(1, val.length - 1);
-  }
-
-  // Boolean
-  if (val === 'true') return true;
-  if (val === 'false') return false;
-
-  // Number
-  if (/^-?\d+$/.test(val)) return parseInt(val, 10);
-  if (/^-?\d+\.\d+$/.test(val)) return parseFloat(val);
-
-  // Plain string
-  return val;
-}
-
-/**
- * Find the next non-empty, non-comment line starting from the given index.
- */
-function findNextNonEmpty(lines, startIdx) {
-  for (var i = startIdx; i < lines.length; i++) {
-    var l = lines[i];
-    var trimmed = l.trim();
-    if (!trimmed || trimmed[0] === '#') continue;
-    var indent = 0;
-    while (indent < l.length && (l[indent] === ' ' || l[indent] === '\t')) indent++;
-    return { line: l, indent: indent, trimmed: trimmed, lineNum: i };
-  }
-  return null;
 }
 
 /**

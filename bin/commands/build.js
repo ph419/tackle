@@ -2,6 +2,7 @@
 
 var path = require('path');
 var fs = require('fs');
+var safePath = require('../../plugins/runtime/safe-path');
 
 /**
  * Build command - Build all plugins into .claude/skills/ and update settings.json
@@ -135,7 +136,8 @@ function cleanStaleOutput(ctx, builder) {
 
     // Security check: ensure the directory is within the expected output tree
     var normalizedDir = path.normalize(dir);
-    if (normalizedDir.indexOf(path.normalize(ctx.targetRoot)) !== 0) {
+    // S6：用 isWithin 替代 indexOf===0，避免 /foo 被误判为 /foobar 的父目录
+    if (!safePath.isWithin(path.normalize(ctx.targetRoot), normalizedDir)) {
       console.log(ctx.colorize('[tackle-harness] Warning: skipping suspicious output directory', 'yellow'));
       continue;
     }
@@ -158,7 +160,8 @@ function cleanStaleOutput(ctx, builder) {
 
         // Final security check: verify the path is still within the output directory
         var normalizedStalePath = path.normalize(stalePath);
-        if (normalizedStalePath.indexOf(normalizedDir) !== 0) {
+        // S6：用 isWithin 替代 indexOf===0（此处在 rmSync 前，最关键）
+        if (!safePath.isWithin(normalizedDir, normalizedStalePath)) {
           console.log(ctx.colorize('[tackle-harness] Warning: skipping suspicious stale path', 'yellow'));
           continue;
         }

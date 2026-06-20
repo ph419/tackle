@@ -96,6 +96,12 @@ function createTestRegistry(tmpDir, plugins) {
       pluginJson.provides = p.provides;
     }
 
+    // Persist top-level `dependencies` string array (canonical plugin.json schema, B2).
+    // When set on the plugin.json itself (not just config), the loader must read it.
+    if (p.dependencies) {
+      pluginJson.dependencies = p.dependencies;
+    }
+
     fs.writeFileSync(
       path.join(pluginDir, 'plugin.json'),
       JSON.stringify(pluginJson, null, 2),
@@ -751,6 +757,101 @@ test.describe('PluginLoader - External Plugin Loading (sourceType)', () => {
     // Cleanup
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
+
+  test('S3: should warn when loading a third-party plugin via require()', async () => {
+    // The sandbox is decorative; loading a non-Skill npm/local plugin runs its
+    // constructor in the main process. The loader must surface a warn log so
+    // operators know the plugin has full process privileges.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-loader-s3-'));
+    const externalDir = path.join(tmpDir, 'external-plugins', 'ext-hook');
+    fs.mkdirSync(externalDir, { recursive: true });
+
+    const pluginInterfacePath = path.resolve(__dirname, '../../plugins/contracts/plugin-interface.js').replace(/\\/g, '/');
+
+    fs.writeFileSync(
+      path.join(externalDir, 'plugin.json'),
+      JSON.stringify({
+        name: 'ext-hook',
+        version: '1.0.0',
+        type: 'hook',
+        description: 'External hook'
+      }, null, 2),
+      'utf-8'
+    );
+    fs.writeFileSync(
+      path.join(externalDir, 'index.js'),
+      `'use strict';
+const { HookPlugin } = require('${pluginInterfacePath}');
+class ExtHook extends HookPlugin {
+  constructor() { super(); this.name = 'ext-hook'; this.version = '1.0.0'; }
+  async handle(context) { return { allowed: true }; }
+}
+module.exports = ExtHook;
+`,
+      'utf-8'
+    );
+
+    const registryPath = createTestRegistry(tmpDir, [
+      { name: 'core-skill', type: 'skill' }
+    ]);
+    const registry = JSON.parse(fs.readFileSync(registryPath, 'utf-8'));
+    registry.plugins.push({
+      name: 'ext-hook',
+      source: externalDir,
+      sourceType: 'local',
+      enabled: true,
+      config: {}
+    });
+    fs.writeFileSync(registryPath, JSON.stringify(registry, null, 2), 'utf-8');
+
+    const PluginLoader = require('../../plugins/runtime/plugin-loader');
+    const logger = new MockLogger();
+    const loader = new PluginLoader({
+      registryPath,
+      eventBus: new MockEventBus(),
+      stateStore: new MockStateStore(),
+      configManager: new MockConfigManager(),
+      logger
+    });
+
+    await loader.loadAll();
+
+    // S3: a warn log must mention the third-party plugin + decorative sandbox
+    const warnLogs = logger.logs.filter(
+      l => l.level === 'warn' &&
+        l.msg.includes('ext-hook') &&
+        l.msg.includes('sandbox is decorative')
+    );
+    assert.ok(warnLogs.length > 0, 'warn emitted for third-party plugin load (S3)');
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test('S3: should NOT warn when loading a core plugin', async () => {
+    // Core plugins are first-party and trusted; no decorative-sandbox warning.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-loader-s3-'));
+    const registryPath = createTestRegistry(tmpDir, [
+      { name: 'core-skill', type: 'skill' },
+      { name: 'core-provider', type: 'provider', provides: ['provider:core'], version: '1.0.0' }
+    ]);
+
+    const PluginLoader = require('../../plugins/runtime/plugin-loader');
+    const logger = new MockLogger();
+    const loader = new PluginLoader({
+      registryPath,
+      eventBus: new MockEventBus(),
+      stateStore: new MockStateStore(),
+      configManager: new MockConfigManager(),
+      logger
+    });
+
+    await loader.loadAll();
+
+    const sandboxWarns = logger.logs.filter(l => l.level === 'warn' && l.msg.includes('sandbox is decorative'));
+    assert.strictEqual(sandboxWarns.length, 0, 'no decorative-sandbox warning for core plugins (S3)');
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
 });
 
 test.describe('PluginLoader - Provider Dependency Chain', () => {
@@ -1057,3 +1158,175 @@ module.exports = ExtProvider;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 });
+
+// Helper to capture load order via the logger
+function captureLoadOrder(logger) {
+  const loadOrder = [];
+  const originalLog = logger.info.bind(logger);
+  logger.info = (plugin, msg) => {
+    if (msg.includes('Load order resolved')) {
+      const match = msg.match(/Load order resolved: (.+)/);
+      if (match) loadOrder.push(...match[1].split(', '));
+    }
+    originalLog(plugin, msg);
+  };
+  return loadOrder;
+}
+
+test.describe('PluginLoader - B2 regression: top-level plugin.json dependencies', () => {
+  // B2: plugin.json's canonical schema is `"dependencies": ["provider:state-store"]`
+  // (top-level string array), but the loader only read config.dependencies.{plugins,providers}.
+  // Result: the dependency graph contained no edges for real-world plugins, so a
+  // provider could load AFTER a consumer that needs it.
+  test('should read top-level dependencies string array from plugin.json', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-loader-b2-'));
+    const registryPath = createTestRegistry(tmpDir, [
+      // hook-skill-gate depends on provider:state-store, declared at top level of plugin.json
+      { name: 'hook-skill-gate', type: 'hook', provides: ['hook:skill-gate'], dependencies: ['provider:state-store'] },
+      { name: 'provider-state-store', type: 'provider', provides: ['provider:state-store'], version: '1.0.0' }
+    ]);
+
+    const PluginLoader = require('../../plugins/runtime/plugin-loader');
+    const logger = new MockLogger();
+    const loadOrder = captureLoadOrder(logger);
+
+    const loader = new PluginLoader({
+      registryPath,
+      eventBus: new MockEventBus(),
+      stateStore: new MockStateStore(),
+      configManager: new MockConfigManager(),
+      logger
+    });
+
+    await loader.loadAll();
+
+    const providerIndex = loadOrder.indexOf('provider-state-store');
+    const hookIndex = loadOrder.indexOf('hook-skill-gate');
+    assert.ok(providerIndex !== -1 && hookIndex !== -1, 'both plugins loaded');
+    assert.ok(providerIndex < hookIndex, 'provider must load before hook that depends on it (B2)');
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test('should resolve short provider name in top-level dependencies', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-loader-b2-'));
+    const registryPath = createTestRegistry(tmpDir, [
+      // Short form (no "provider:" prefix) must also resolve
+      { name: 'consumer', type: 'skill', dependencies: ['state-store'] },
+      { name: 'provider-state-store', type: 'provider', provides: ['provider:state-store'], version: '1.0.0' }
+    ]);
+
+    const PluginLoader = require('../../plugins/runtime/plugin-loader');
+    const logger = new MockLogger();
+    const loadOrder = captureLoadOrder(logger);
+
+    const loader = new PluginLoader({
+      registryPath,
+      eventBus: new MockEventBus(),
+      stateStore: new MockStateStore(),
+      configManager: new MockConfigManager(),
+      logger
+    });
+
+    await loader.loadAll();
+
+    const providerIndex = loadOrder.indexOf('provider-state-store');
+    const consumerIndex = loadOrder.indexOf('consumer');
+    assert.ok(providerIndex < consumerIndex, 'provider loaded before consumer via short name (B2)');
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test('should support string-form `provides` (not just array)', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-loader-b2-'));
+    const registryPath = createTestRegistry(tmpDir, [
+      { name: 'consumer', type: 'skill', dependencies: ['provider:solo'] },
+      // provides declared as a single string, not an array
+      { name: 'provider-solo', type: 'provider', provides: 'provider:solo', version: '1.0.0' }
+    ]);
+
+    const PluginLoader = require('../../plugins/runtime/plugin-loader');
+    const logger = new MockLogger();
+    const loadOrder = captureLoadOrder(logger);
+
+    const loader = new PluginLoader({
+      registryPath,
+      eventBus: new MockEventBus(),
+      stateStore: new MockStateStore(),
+      configManager: new MockConfigManager(),
+      logger
+    });
+
+    await loader.loadAll();
+
+    const providerIndex = loadOrder.indexOf('provider-solo');
+    const consumerIndex = loadOrder.indexOf('consumer');
+    assert.ok(providerIndex < consumerIndex, 'string-form provides recognized (B2)');
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test('should build correct dependency graph for the real hook-skill-gate plugin', async () => {
+    // Reproduces the original PoC: hook-skill-gate depends on provider:state-store
+    // but provider-state-store appeared AFTER hook-skill-gate in load order due to
+    // _buildDependencyGraph reading the wrong schema. Verify the loader can introspect
+    // _buildDependencyGraph directly.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-loader-b2-'));
+    const registryPath = createTestRegistry(tmpDir, [
+      { name: 'hook-skill-gate', type: 'hook', provides: ['hook:skill-gate'], dependencies: ['provider:state-store'] },
+      { name: 'provider-state-store', type: 'provider', provides: ['provider:state-store'], version: '1.0.0' }
+    ]);
+
+    const PluginLoader = require('../../plugins/runtime/plugin-loader');
+    const loader = new PluginLoader({
+      registryPath,
+      eventBus: new MockEventBus(),
+      stateStore: new MockStateStore(),
+      configManager: new MockConfigManager(),
+      logger: new MockLogger()
+    });
+
+    // Read registry and prime internal configs like loadAll() does
+    loader._registry = loader._readRegistry();
+    const names = loader._getPluginNames();
+    const graph = loader._buildDependencyGraph(names);
+
+    // hook-skill-gate must have an edge to provider-state-store (previously was [])
+    assert.ok(graph.has('hook-skill-gate'), 'hook-skill-gate in graph');
+    const gateDeps = graph.get('hook-skill-gate');
+    assert.ok(gateDeps.indexOf('provider-state-store') !== -1,
+      'hook-skill-gate must depend on provider-state-store (got: ' + JSON.stringify(gateDeps) + ')');
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test('should keep reading legacy config.dependencies.{plugins,providers}', async () => {
+    // Backward compatibility: existing tests rely on the object form.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-loader-b2-'));
+    const registryPath = createTestRegistry(tmpDir, [
+      { name: 'consumer-plugin', type: 'skill', config: { dependencies: { plugins: ['base-plugin'], providers: ['provider:state-store'] } } },
+      { name: 'base-plugin', type: 'skill' },
+      { name: 'provider-state-store', type: 'provider', provides: ['provider:state-store'], version: '1.0.0' }
+    ]);
+
+    const PluginLoader = require('../../plugins/runtime/plugin-loader');
+    const logger = new MockLogger();
+    const loadOrder = captureLoadOrder(logger);
+
+    const loader = new PluginLoader({
+      registryPath,
+      eventBus: new MockEventBus(),
+      stateStore: new MockStateStore(),
+      configManager: new MockConfigManager(),
+      logger
+    });
+
+    await loader.loadAll();
+
+    assert.ok(loadOrder.indexOf('base-plugin') < loadOrder.indexOf('consumer-plugin'), 'legacy plugin dep honored');
+    assert.ok(loadOrder.indexOf('provider-state-store') < loadOrder.indexOf('consumer-plugin'), 'legacy provider dep honored');
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+});
+

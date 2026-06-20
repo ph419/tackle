@@ -372,13 +372,23 @@ class PluginLoader {
 
   /**
    * Build a dependency graph from plugin configs.
-   * Handles both plugin dependencies (dependencies.plugins) and
-   * provider dependencies (dependencies.providers).
    *
-   * Provider dependencies are resolved by scanning plugin.json files to
-   * build a provider-name -> plugin-name mapping, then adding edges so
-   * that plugins depending on a provider are loaded after the provider
-   * plugin that provides it.
+   * Supports two dependency declaration styles (B2 fix):
+   *
+   *   1. **Top-level `dependencies` string array** (canonical plugin.json schema,
+   *      e.g. `"dependencies": ["provider:state-store", "base-plugin"]`).
+   *      Each entry is classified:
+   *        - `provider:xxx` or a name that resolves to a provider → provider edge
+   *        - otherwise → plain plugin-name edge
+   *      Short names without the `provider:` prefix are also resolved against
+   *      the provider map (e.g. `["state-store"]`).
+   *
+   *   2. **Legacy `config.dependencies.{plugins,providers}` object form**
+   *      (used by older test fixtures). Still accepted for backward compat.
+   *
+   * Provider dependencies are resolved against the provider-name → plugin-name
+   * map built by `_buildProviderMap` so that a plugin depending on a provider
+   * is loaded after the plugin that provides it.
    *
    * @internal
    * @param {string[]} pluginNames
@@ -387,8 +397,13 @@ class PluginLoader {
   _buildDependencyGraph(pluginNames) {
     var graph = new Map();
 
-    // Phase 1: Build a provider-name -> plugin-name mapping by scanning plugin.json
+    // Phase 1: Build a provider-name -> plugin-name mapping by scanning plugin.json.
+    // This also primes `_pluginJsonCache` so we can reuse the parsed plugin.json
+    // below without re-resolving paths.
     var providerToPlugin = this._buildProviderMap(pluginNames);
+
+    // Index of plugin names for quick "is this a plain plugin dep?" lookup
+    var nameSet = new Set(pluginNames);
 
     // Phase 2: Build dependency edges
     for (var i = 0; i < pluginNames.length; i++) {
@@ -396,31 +411,36 @@ class PluginLoader {
       var entry = this._pluginConfigs.get(name);
       var deps = [];
 
-      // Plugin dependencies: entry.config.dependencies.plugins
-      if (entry && entry.config && entry.config.dependencies) {
+      // Reuse the plugin.json already scanned in Phase 1 (fault-tolerant: {} on miss)
+      var pluginJson = this._pluginJsonCache && this._pluginJsonCache.get(name) || {};
+
+      // --- Canonical form: top-level `dependencies` string array on plugin.json
+      //     (may also appear mirrored on entry.config.dependencies as array) ---
+      var topLevelDeps = [];
+      if (pluginJson && Array.isArray(pluginJson.dependencies)) {
+        topLevelDeps = topLevelDeps.concat(pluginJson.dependencies);
+      }
+      if (entry && entry.config && Array.isArray(entry.config.dependencies)) {
+        topLevelDeps = topLevelDeps.concat(entry.config.dependencies);
+      }
+      this._addClassifiedDeps(deps, topLevelDeps, providerToPlugin, nameSet, name);
+
+      // --- Legacy form: config.dependencies.{plugins,providers} object ---
+      if (entry && entry.config && entry.config.dependencies &&
+          !Array.isArray(entry.config.dependencies)) {
+        // Plugin dependencies: entry.config.dependencies.plugins
         var pluginDeps = entry.config.dependencies.plugins || [];
         if (Array.isArray(pluginDeps)) {
           for (var j = 0; j < pluginDeps.length; j++) {
-            deps.push(pluginDeps[j]);
+            this._addPluginDep(deps, pluginDeps[j], nameSet, name);
           }
         }
-      }
 
-      // Provider dependencies: entry.config.dependencies.providers
-      if (entry && entry.config && entry.config.dependencies) {
+        // Provider dependencies: entry.config.dependencies.providers
         var providerDeps = entry.config.dependencies.providers || [];
         if (Array.isArray(providerDeps)) {
           for (var k = 0; k < providerDeps.length; k++) {
-            var providerName = providerDeps[k];
-            var resolvedPlugin = providerToPlugin.get(providerName);
-            if (resolvedPlugin) {
-              // Avoid duplicate edges
-              if (deps.indexOf(resolvedPlugin) === -1) {
-                deps.push(resolvedPlugin);
-              }
-            } else {
-              this._log('warn', 'Plugin "' + name + '" depends on provider "' + providerName + '" which is not provided by any plugin');
-            }
+            this._addProviderDep(deps, providerDeps[k], providerToPlugin, name);
           }
         }
       }
@@ -431,8 +451,77 @@ class PluginLoader {
   }
 
   /**
+   * Classify and append a list of canonical (top-level) dependency tokens.
+   * A token is either a `provider:` reference (or a short provider name) or
+   * a plain plugin name.
+   * @internal
+   */
+  _addClassifiedDeps(deps, tokens, providerToPlugin, nameSet, consumerName) {
+    for (var i = 0; i < tokens.length; i++) {
+      var tok = tokens[i];
+      if (typeof tok !== 'string' || tok === '') continue;
+      // Any token that maps to a provider (full or short name) → provider edge
+      if (providerToPlugin.has(tok) || providerToPlugin.has('provider:' + tok)) {
+        var resolved = providerToPlugin.get(tok) || providerToPlugin.get('provider:' + tok);
+        if (resolved && deps.indexOf(resolved) === -1) {
+          deps.push(resolved);
+        }
+        continue;
+      }
+      // Token explicitly written with a capability prefix we don't recognize
+      if (tok.indexOf(':') !== -1) {
+        this._log('warn', 'Plugin "' + consumerName + '" depends on provider "' + tok +
+          '" which is not provided by any plugin');
+        continue;
+      }
+      // Otherwise treat as plain plugin-name dependency
+      this._addPluginDep(deps, tok, nameSet, consumerName);
+    }
+  }
+
+  /**
+   * Append a plain plugin-name dependency edge (dedup).
+   * @internal
+   */
+  _addPluginDep(deps, depName, nameSet, consumerName) {
+    if (typeof depName !== 'string' || depName === '') return;
+    if (!nameSet.has(depName)) {
+      // Unknown dep will be flagged during topological sort; keep edge so the
+      // error surfaces rather than silently dropping it.
+      this._log('warn', 'Plugin "' + consumerName + '" depends on unknown plugin "' + depName + '"');
+    }
+    if (deps.indexOf(depName) === -1) {
+      deps.push(depName);
+    }
+  }
+
+  /**
+   * Append a provider dependency edge (dedup), resolving full or short name.
+   * @internal
+   */
+  _addProviderDep(deps, providerName, providerToPlugin, consumerName) {
+    if (typeof providerName !== 'string' || providerName === '') return;
+    var resolved = providerToPlugin.get(providerName) ||
+      providerToPlugin.get('provider:' + providerName);
+    if (resolved) {
+      if (deps.indexOf(resolved) === -1) {
+        deps.push(resolved);
+      }
+    } else {
+      this._log('warn', 'Plugin "' + consumerName + '" depends on provider "' + providerName +
+        '" which is not provided by any plugin');
+    }
+  }
+
+  /**
    * Build a mapping from provider names to plugin names by scanning plugin.json files.
    * Reads each plugin's plugin.json to discover the "provides" field.
+   *
+   * The `provides` field may be either an array of capability strings
+   * (e.g. `["provider:state-store", "hook:session-start"]`) or a single
+   * capability string (e.g. `"provider:state-store"`). Both forms are
+   * normalized into the map under both the full (`provider:state-store`)
+   * and short (`state-store`) keys.
    *
    * @internal
    * @param {string[]} pluginNames
@@ -440,42 +529,71 @@ class PluginLoader {
    */
   _buildProviderMap(pluginNames) {
     var providerToPlugin = new Map();
+    // Prime a name -> plugin.json cache so _buildDependencyGraph can reuse
+    // the same parsed plugin.json without re-resolving paths. Fault-tolerant:
+    // any plugin whose plugin.json can't be resolved/read is stored as {}.
+    if (!this._pluginJsonCache) {
+      this._pluginJsonCache = new Map();
+    }
 
     for (var i = 0; i < pluginNames.length; i++) {
       var name = pluginNames[i];
       var entry = this._pluginConfigs.get(name);
 
-      // Resolve plugin directory to read plugin.json
+      var pluginJson = {};
       try {
-        var source = entry && entry.source ? entry.source : name;
-        var sourceType = entry && entry.sourceType ? entry.sourceType : 'core';
-        var resolvePluginPath = require('./resolve-plugin-path').resolvePluginPath;
-        var registryDir = path.resolve(path.dirname(this._registryPath));
-        var defaultPluginsDir = path.join(registryDir, 'core');
-        var pluginDir = resolvePluginPath(
-          { name: name, source: source, sourceType: sourceType },
-          defaultPluginsDir,
-          registryDir
-        );
-
-        var pluginJsonPath = path.join(pluginDir, 'plugin.json');
-        var pluginJson = this._readPluginJson(pluginJsonPath);
-
-        if (pluginJson.provides && Array.isArray(pluginJson.provides)) {
-          for (var j = 0; j < pluginJson.provides.length; j++) {
-            var providerName = pluginJson.provides[j].replace(/^provider:/, '');
-            providerToPlugin.set(providerName, name);
-            // Also store the full form (e.g. "provider:state-store")
-            providerToPlugin.set(pluginJson.provides[j], name);
-          }
-        }
+        pluginJson = this._readPluginJsonForEntry(name, entry);
       } catch (err) {
         // If we can't resolve or read, skip — will be caught later during load
         this._log('warn', 'Could not scan plugin.json for "' + name + '": ' + err.message);
       }
+      this._pluginJsonCache.set(name, pluginJson);
+
+      var provides = pluginJson && pluginJson.provides;
+      if (!provides) continue;
+
+      // Normalize `provides` to an array of strings
+      var providesList = Array.isArray(provides) ? provides :
+        (typeof provides === 'string' ? [provides] : []);
+
+      for (var j = 0; j < providesList.length; j++) {
+        var cap = String(providesList[j]);
+        if (!cap) continue;
+        providerToPlugin.set(cap, name);
+        // Also store the short form (capability stripped of its prefix)
+        var shortName = cap.replace(/^[A-Za-z]+:/, '');
+        if (shortName && shortName !== cap) {
+          providerToPlugin.set(shortName, name);
+        }
+      }
     }
 
     return providerToPlugin;
+  }
+
+  /**
+   * Resolve the plugin directory for an entry and read its plugin.json.
+   * Shared by `_buildDependencyGraph` and `_buildProviderMap` so both phases
+   * see the same canonical plugin.json (rather than one reading plugin.json
+   * and the other reading only the registry entry's config).
+   * @internal
+   * @param {string} name
+   * @param {object} [entry]
+   * @returns {object} parsed plugin.json (empty object on failure)
+   */
+  _readPluginJsonForEntry(name, entry) {
+    var source = entry && entry.source ? entry.source : name;
+    var sourceType = entry && entry.sourceType ? entry.sourceType : 'core';
+    var resolvePluginPath = require('./resolve-plugin-path').resolvePluginPath;
+    var registryDir = path.resolve(path.dirname(this._registryPath));
+    var defaultPluginsDir = path.join(registryDir, 'core');
+    var pluginDir = resolvePluginPath(
+      { name: name, source: source, sourceType: sourceType },
+      defaultPluginsDir,
+      registryDir
+    );
+    var pluginJsonPath = path.join(pluginDir, 'plugin.json');
+    return this._readPluginJson(pluginJsonPath);
   }
 
   /**
@@ -571,7 +689,22 @@ class PluginLoader {
       pluginInstance.triggers = pluginJson.triggers || [];
       pluginInstance.metadata = pluginJson.metadata || {};
     } else {
-      // Hook/Validator/Provider: require and instantiate using absolute path
+      // Hook/Validator/Provider: require and instantiate using absolute path.
+      //
+      // S3 SECURITY NOTE: this `require()` runs the plugin's constructor code in
+      // the MAIN process, with full access to fs/net/process/env. The
+      // SandboxManager/worker_thread machinery in this repo is NOT wired into
+      // this path — `capabilities.js` (e.g. `child_process: forbidden` for
+      // npm/local) is declarative only and is never enforced here. Treat the
+      // sandbox as decorative: only register plugins you fully trust. See
+      // docs/design/sandbox-threat-model.md for the full threat model.
+      if (sourceType === 'npm' || sourceType === 'local') {
+        this._log('warn',
+          'Loading third-party plugin "' + name + '" (sourceType=' + sourceType + ') via ' +
+          'main-process require(). The sandbox is decorative and is NOT enforced; ' +
+          'this plugin will run with full process privileges. Only load plugins you trust.'
+        );
+      }
       var indexJsPath = path.resolve(pluginDir, 'index.js');
       var PluginClass = require(indexJsPath);
 

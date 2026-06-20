@@ -47,6 +47,9 @@ function createContext(opts) {
     flags: opts.flags,
     command: opts.command,
     packageVersion: opts.packageVersion,
+    // Command arguments after the command name (parsed by bin/tackle.js).
+    // May be undefined for older callers; commands that need args should default to [].
+    argv: opts.argv || [],
 
     // Convenience path accessors
     get skillsDir() {
@@ -103,8 +106,20 @@ function createContext(opts) {
 
     /**
      * Exit the process with the given code.
+     *
+     * A4: in test mode (TACKLE_TEST_MODE=1), throws a sentinel error instead
+     * of calling process.exit so that bin/commands can be exercised inside a
+     * test runner without killing the process. The CLI entry point
+     * (bin/tackle.js) catches ExitSignal and converts it back to process.exit.
+     * In production (no env var), behaves exactly as before (process.exit).
      */
     exit: function (code) {
+      if (process.env.TACKLE_TEST_MODE === '1') {
+        var err = new Error('ExitSignal:' + code);
+        err.isExitSignal = true;
+        err.exitCode = code;
+        throw err;
+      }
       process.exit(code);
     },
   };
@@ -112,8 +127,17 @@ function createContext(opts) {
   return ctx;
 }
 
+/**
+ * Sentinel error name for exit signals thrown in test mode (A4).
+ * Callers that catch exceptions can check `err.isExitSignal` to distinguish
+ * a process-exit request from a real error.
+ * @public
+ */
+var EXIT_SIGNAL = 'ExitSignal';
+
 module.exports = {
   colors: colors,
   colorize: colorize,
   createContext: createContext,
+  EXIT_SIGNAL: EXIT_SIGNAL,
 };

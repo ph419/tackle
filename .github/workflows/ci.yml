@@ -26,9 +26,13 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
+          # H3: cache npm dependencies to speed up CI
+          cache: 'npm'
 
       - name: Install dependencies
-        run: npm install
+        # H3: npm ci for reproducible installs (uses package-lock.json, fails
+        # if it drifts from package.json). Faster and stricter than npm install.
+        run: npm ci
 
       - name: Validate plugins
         run: npm run validate
@@ -54,9 +58,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          # H3: cache npm dependencies
+          cache: 'npm'
 
       - name: Install dependencies
-        run: npm install
+        # H3: npm ci for reproducible installs
+        run: npm ci
 
       - name: Build plugins
         run: npm run build

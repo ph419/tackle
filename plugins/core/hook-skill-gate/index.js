@@ -414,110 +414,24 @@ class SkillGateHook extends HookPlugin {
   }
 
   /**
-   * Minimal YAML-like parser for simple key-value YAML files.
-   * Handles nested structure via indentation (spaces only).
-   * This is NOT a full YAML parser - it covers the subset used by harness-config.yaml.
+   * Minimal YAML-like parser — S8/A3 consolidated.
+   *
+   * Delegates to the shared `yaml-parser.parseSimpleYaml`. Previously this
+   * hook had its own divergent copy (which silently dropped list items and
+   * lacked size/depth guards). The shared parser also fixes B4 (top-level
+   * scalar arrays now parse correctly).
    * @param {string} content
    * @returns {object}
    */
   _parseSimpleYaml(content) {
-    var result = {};
-    var lines = content.split('\n');
-    var stack = [{ obj: result, indent: -1 }];
-
-    for (var i = 0; i < lines.length; i++) {
-      var line = lines[i];
-
-      // Skip empty lines, comments, and document separators
-      if (!line.trim() || line.trim().indexOf('#') === 0 || line.trim() === '---') {
-        continue;
-      }
-
-      // Calculate indentation
-      var indent = line.search(/\S/);
-      if (indent < 0) continue;
-
-      // Pop stack to find parent
-      while (stack.length > 1 && stack[stack.length - 1].indent >= indent) {
-        stack.pop();
-      }
-
-      var parent = stack[stack.length - 1].obj;
-      var trimmed = line.trim();
-
-      // Check if it's a list item
-      if (trimmed.indexOf('- ') === 0) {
-        if (!Array.isArray(parent)) continue;
-        var itemValue = this._parseYamlValue(trimmed.substring(2));
-        parent.push(itemValue);
-        continue;
-      }
-
-      // Key-value pair: split on first colon only
-      var colonIdx = trimmed.indexOf(':');
-      if (colonIdx === -1) continue;
-
-      var key = trimmed.substring(0, colonIdx).trim();
-      var valuePart = trimmed.substring(colonIdx + 1).trim();
-
-      // Handle inline comments (only outside quoted strings)
-      if (valuePart && valuePart.indexOf('#') > -1) {
-        var inQuote = false;
-        var quoteChar = '';
-        var commentIdx = -1;
-        for (var ci = 0; ci < valuePart.length; ci++) {
-          var ch = valuePart.charAt(ci);
-          if (!inQuote && (ch === '"' || ch === "'")) {
-            inQuote = true;
-            quoteChar = ch;
-          } else if (inQuote && ch === quoteChar) {
-            inQuote = false;
-          } else if (!inQuote && ch === '#') {
-            commentIdx = ci;
-            break;
-          }
-        }
-        if (commentIdx > -1) {
-          valuePart = valuePart.substring(0, commentIdx).trim();
-        }
-      }
-
-      if (valuePart === '' || valuePart === null) {
-        // Nested object
-        var child = {};
-        parent[key] = child;
-        stack.push({ obj: child, indent: indent });
-      } else {
-        parent[key] = this._parseYamlValue(valuePart);
-      }
+    var sharedParser = require('../../runtime/yaml-parser');
+    try {
+      return sharedParser.parseSimpleYaml(content);
+    } catch (_e) {
+      // Oversize / over-depth → treat as empty config (preserve old behavior
+      // of never throwing from the config-read path)
+      return {};
     }
-
-    return result;
-  }
-
-  /**
-   * Parse a YAML scalar value.
-   * @param {*} val
-   * @returns {*}
-   */
-  _parseYamlValue(val) {
-    if (val === null || val === undefined) return val;
-    if (typeof val !== 'string') return val;
-    if (val === 'true') return true;
-    if (val === 'false') return false;
-    if (val === 'null' || val === '~') return null;
-
-    // Remove surrounding quotes
-    if ((val.charAt(0) === '"' && val.charAt(val.length - 1) === '"') ||
-        (val.charAt(0) === "'" && val.charAt(val.length - 1) === "'")) {
-      return val.substring(1, val.length - 1);
-    }
-
-    // Try number
-    var num = Number(val);
-    if (!isNaN(num) && val !== '') return num;
-
-    return val;
   }
 
   /**

@@ -110,7 +110,10 @@ module.exports = {
   name: 'install',
   description: 'Install an external plugin with security review',
   execute: function (ctx) {
-    var pluginName = ctx.args && ctx.args[0];
+    // B1 修复：context 仅提供 ctx.argv（bin/context.js），原代码误用 ctx.args
+    // 导致任何调用都恒报 "Plugin name required"。
+    var argv = ctx.argv || [];
+    var pluginName = argv[0];
 
     if (!pluginName) {
       console.error(ctx.colorize('Error: Plugin name required. Usage: tackle install <plugin-name>', 'red'));
@@ -141,7 +144,7 @@ module.exports = {
     var sourceType = entry.sourceType || 'core';
     if (sourceType === 'core') {
       console.log('[tackle-harness] Core plugin — no security review needed.');
-      console.log(ctx.colorize('[tackle-harness] Plugin ' + pluginName + ' installed.', 'green'));
+      console.log(ctx.colorize('[tackle-harness] Security review passed: ' + pluginName + ' (already part of the harness build).', 'green'));
       ctx.exit(0);
       return;
     }
@@ -179,7 +182,10 @@ module.exports = {
 
     confirmInstall(pluginName, mergedEntry).then(function (confirmed) {
       if (confirmed) {
-        console.log(ctx.colorize('[tackle-harness] Plugin ' + pluginName + ' installed.', 'green'));
+        // 注意：本命令目前只做能力声明审查，不执行实际的文件复制/registry 变更/build。
+        // 插件需另行通过 plugin-registry.json 注册并跑 `tackle build` 才会生效。
+        console.log(ctx.colorize('[tackle-harness] Security review passed for ' + pluginName + '.', 'green'));
+        console.log('[tackle-harness] Note: this command reviews capabilities only — add the plugin to plugin-registry.json and run `tackle build` to make it active.');
         ctx.exit(0);
       } else {
         ctx.exit(1);

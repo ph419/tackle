@@ -21,65 +21,35 @@ var path = require('path');
 
 /**
  * Minimal YAML-like parser for simple key-value YAML files.
- * Handles nested structure via indentation (spaces only).
- * This is NOT a full YAML parser - it covers the subset used by harness-config.yaml.
+ *
+ * S8/A3: this delegates to the shared `yaml-parser.parseSimpleYaml`, which
+ * consolidates the 5 divergent YAML parsers that previously existed in the
+ * codebase (config-manager, config-validator, hook-skill-gate,
+ * provider-role-registry, and yaml-parser). The shared parser:
+ *   - enforces MAX_YAML_SIZE / MAX_DEPTH (DoS guard the old copies lacked)
+ *   - correctly parses top-level scalar arrays (B4 fix: `triggers:\n  - foo`
+ *     previously parsed to `{}` empty object, losing data)
+ *   - handles list-of-objects, nested objects, quoted strings, comments
+ * The local `parseValue` is kept only for the env-var resolution path in
+ * get(); YAML parsing now goes through the shared helper.
  * @internal
  */
 function parseSimpleYaml(content) {
-  var result = {};
-  var lines = content.split('\n');
-  var stack = [{ obj: result, indent: -1 }];
-
-  for (var i = 0; i < lines.length; i++) {
-    var line = lines[i];
-
-    // Skip empty lines, comments, and document separators
-    if (!line.trim() || line.trim().indexOf('#') === 0 || line.trim() === '---') {
-      continue;
-    }
-
-    // Calculate indentation
-    var indent = line.search(/\S/);
-    if (indent < 0) continue;
-
-    // Pop stack to find parent
-    while (stack.length > 1 && stack[stack.length - 1].indent >= indent) {
-      stack.pop();
-    }
-
-    var parent = stack[stack.length - 1].obj;
-    var trimmed = line.trim();
-
-    // Check if it's a list item
-    if (trimmed.indexOf('- ') === 0) {
-      if (!Array.isArray(parent)) continue;
-      var itemValue = parseValue(trimmed.substring(2));
-      parent.push(itemValue);
-      continue;
-    }
-
-    // Key-value pair
-    var colonIdx = trimmed.indexOf(':');
-    if (colonIdx === -1) continue;
-
-    var key = trimmed.substring(0, colonIdx).trim();
-    var valuePart = trimmed.substring(colonIdx + 1).trim();
-
-    if (valuePart === '' || valuePart === null) {
-      // Nested object
-      var child = {};
-      parent[key] = child;
-      stack.push({ obj: child, indent: indent });
-    } else {
-      parent[key] = parseValue(valuePart);
-    }
+  // Re-require lazily to avoid a circular import at module-load time
+  // (yaml-parser does not require config-manager, but keep it lazy for safety).
+  var sharedParser = require('./yaml-parser');
+  try {
+    return sharedParser.parseSimpleYaml(content);
+  } catch (_e) {
+    // Oversize / over-depth → treat as empty config (do not crash callers)
+    return {};
   }
-
-  return result;
 }
 
 /**
  * Parse a YAML scalar value.
+ * B12: require length >= 2 before stripping quotes so a lone quote char is
+ * not truncated to '' and an unbalanced leading quote is returned verbatim.
  * @internal
  */
 function parseValue(val) {
@@ -87,9 +57,10 @@ function parseValue(val) {
   if (val === 'false') return false;
   if (val === 'null' || val === '~') return null;
 
-  // Remove surrounding quotes
-  if ((val.charAt(0) === '"' && val.charAt(val.length - 1) === '"') ||
-      (val.charAt(0) === "'" && val.charAt(val.length - 1) === "'")) {
+  // Remove surrounding quotes (only when the value is fully wrapped)
+  if (val.length >= 2 &&
+      ((val.charAt(0) === '"' && val.charAt(val.length - 1) === '"') ||
+       (val.charAt(0) === "'" && val.charAt(val.length - 1) === "'"))) {
     return val.substring(1, val.length - 1);
   }
 
@@ -263,6 +234,10 @@ class ConfigManager {
     var parts = key.split('.');
     var current = obj;
     for (var i = 0; i < parts.length; i++) {
+      // S7：拒绝原型污染段
+      if (parts[i] === '__proto__' || parts[i] === 'constructor' || parts[i] === 'prototype') {
+        return undefined;
+      }
       if (current === null || current === undefined || typeof current !== 'object') {
         return undefined;
       }
@@ -279,12 +254,20 @@ class ConfigManager {
     var parts = key.split('.');
     var current = obj;
     for (var i = 0; i < parts.length - 1; i++) {
+      // S7：拒绝原型污染段，写入 __proto__/constructor/prototype 视为 no-op
+      if (parts[i] === '__proto__' || parts[i] === 'constructor' || parts[i] === 'prototype') {
+        return;
+      }
       if (typeof current[parts[i]] !== 'object' || current[parts[i]] === null) {
         current[parts[i]] = {};
       }
       current = current[parts[i]];
     }
-    current[parts[parts.length - 1]] = value;
+    var last = parts[parts.length - 1];
+    if (last === '__proto__' || last === 'constructor' || last === 'prototype') {
+      return;
+    }
+    current[last] = value;
   }
 
   /**
@@ -295,12 +278,20 @@ class ConfigManager {
     var parts = key.split('.');
     var current = obj;
     for (var i = 0; i < parts.length - 1; i++) {
+      // S7：拒绝原型污染段
+      if (parts[i] === '__proto__' || parts[i] === 'constructor' || parts[i] === 'prototype') {
+        return;
+      }
       if (typeof current[parts[i]] !== 'object' || current[parts[i]] === null) {
         return;
       }
       current = current[parts[i]];
     }
-    delete current[parts[parts.length - 1]];
+    var last = parts[parts.length - 1];
+    if (last === '__proto__' || last === 'constructor' || last === 'prototype') {
+      return;
+    }
+    delete current[last];
   }
 
   /**

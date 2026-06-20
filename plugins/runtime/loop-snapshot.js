@@ -87,8 +87,12 @@ function resolveStore(context) {
       // getProvider 可能是 async（返回 Promise），也可能是同步；两种都兼容
       var maybe = context.getProvider('provider:state-store');
       if (maybe && typeof maybe.then === 'function') {
-        // async getProvider 无法在同步 resolveStore 内 await，降级到本地 store
-        // （engine 注入的 context 在 reflect/observe 路径下已就绪，但此处保持同步安全）
+        // B18/A1：async getProvider 无法在同步 resolveStore 内 await。
+        // 之前只是"靠巧合工作"——降级注释之后没有真正处理。这里明确：
+        // 降级到本地 store（path 由调用方决定），同时通过微任务把 Promise 的
+        // rejection 静默吞掉，避免 unhandledRejection 终止进程。
+        maybe.then(function () { /* provider resolved after fallback; ignore */ },
+                   function (_e) { /* provider rejected; fallback already in use */ });
       } else if (maybe && (typeof maybe.get === 'function' || typeof maybe.getState === 'function')) {
         // provider:state-store 的 factory API 直接暴露 get/set
         return { store: wrapProviderStore(maybe), injected: true };
@@ -98,6 +102,11 @@ function resolveStore(context) {
     }
   }
   // 2) 降级：本地 StateStore
+  // A1 NOTE：跨 loop 物理隔离由调用方负责——bin/commands/loop.js 的
+  // resolveLoopWorkspace 已在 <stateDir>/<loopId>/ 下为每个 loop 建立独立
+  // workspaceRoot，engine 的 StateStore({filePath: workspaceRoot/'.claude-state'})
+  // 即天然分桶。此处保持扁平回退以与 engine 的 StateStore 路径一致，避免
+  // snapshot/actuator 与 engine 写入不同文件造成"状态分裂"。
   var root = resolveProjectRoot();
   return {
     store: new StateStore({ filePath: path.join(root, '.claude-state') }),
@@ -203,7 +212,10 @@ function queryGitDiff(projectRoot) {
     deletions += (del === '-' || isNaN(parseInt(del, 10))) ? 0 : parseInt(del, 10);
     changedFiles += 1;
     // filesByWp：尝试从路径提取 WP-XXX 前缀（如 docs/wp/WP-174.md → "WP-174"）
-    var wpMatch = String(filePath).match(/WP-?(\d+)/i);
+    // WP-186 / WP-192-6：正则严格化为 WP-?([A-Za-z0-9][\w-]*)，与 plan-reader
+    // extractExplicitWpId / parseProgressMarkdown 口径完全一致（首字符必须字母/数字，
+    // 杜绝 WP-- / WP-_ 这类下划线/连字符开头编号），支持字母/混合编号。
+    var wpMatch = String(filePath).match(/WP-?([A-Za-z0-9][\w-]*)/i);
     if (wpMatch) {
       var wpKey = 'WP-' + wpMatch[1];
       if (!empty.filesByWp[wpKey]) empty.filesByWp[wpKey] = [];
@@ -216,6 +228,19 @@ function queryGitDiff(projectRoot) {
     deletions: deletions,
     filesByWp: empty.filesByWp,
   };
+}
+
+/**
+ * 判断 wpId 是否落在 goalWps 集合内（WP-186 抽取为独立函数，供完成态兜底与 failed 越界保护共用）。
+ * @param {string[]} goalWps
+ * @param {string} wpId
+ * @returns {boolean}
+ */
+function inGoalStatic(goalWps, wpId) {
+  for (var i = 0; i < goalWps.length; i++) {
+    if (goalWps[i] === wpId) return true;
+  }
+  return false;
 }
 
 /**
@@ -238,8 +263,15 @@ function parseProgressMarkdown(projectRoot) {
   var completed = [];
   var incomplete = [];
   var lines = content.split(/\r?\n/);
-  var reDone = /^\s*[-*]\s*\[[xX✓✔]\]\s*(WP-?\d+)/i;
-  var reTodo = /^\s*[-*]\s*\[\s\]\s*(WP-?\d+)/i;
+  // WP-186 / WP-192-6: 正则从 WP-?\d+ 放宽到 WP-?([A-Za-z0-9][\w-]*)，支持字母/混合编号
+  // （如 WP-A / WP-101 / WP-175），与 plan-reader extractExplicitWpId 口径完全一致
+  // （首字符必须字母/数字，杜绝 WP-- / WP-_ 这类下划线/连字符开头编号），
+  // 且与 engine `_think` 用 goal.wpIds 比较的口径一致。否则字母编号 WP 的完成态
+  // 永远流转不回 engine。
+  var reDone = /^\s*[-*]\s*\[[xX✓✔]\]\s*(WP-?[A-Za-z0-9][\w-]*)/i;
+  var reTodo = /^\s*[-*]\s*\[\s\]\s*(WP-?[A-Za-z0-9][\w-]*)/i;
+  // 注：捕获组 m[1] 形如 "WP-175" / "WPA"（含可选 WP 前缀），下游统一用
+  // m[1].replace(/^WP-?/i,'') 去前缀后规整为 "WP-" + token，与 plan-reader 口径一致。
   for (var i = 0; i < lines.length; i++) {
     var line = lines[i];
     var mDone = line.match(reDone);
@@ -277,6 +309,15 @@ function buildWorkPackages(state, progress, lastChecklist) {
   var goal = (state && state.goal) || {};
   var goalWps = (goal.wpIds && goal.wpIds.length) ? goal.wpIds.slice() : [];
   var completed = (progress && progress.completed) ? progress.completed.slice() : [];
+  // WP-186: 兜底完成态推导 —— 当 lastChecklist.passed===true 且其 wpId 在 goal 范围内时，
+  //   即使 PROGRESS.md 未写（写入与 checklist 回填的时序竞态）也视为 completed。
+  //   防止 driver 回填 lastChecklist 后、PROGRESS.md 同步前的快照误把已过 WP 留在 pending。
+  if (lastChecklist && lastChecklist.passed === true && lastChecklist.wpId) {
+    var chkWpId = lastChecklist.wpId;
+    if (goalWps.length === 0 || inGoalStatic(goalWps, chkWpId)) {
+      if (completed.indexOf(chkWpId) === -1) completed.push(chkWpId);
+    }
+  }
   var hasCompletion = function (wpId) {
     for (var i = 0; i < completed.length; i++) {
       if (completed[i] === wpId) return true;
@@ -285,10 +326,7 @@ function buildWorkPackages(state, progress, lastChecklist) {
   };
   // goal 范围集合（越界保护：failed 必须落在 goal.wpIds 内）
   var inGoal = function (wpId) {
-    for (var i = 0; i < goalWps.length; i++) {
-      if (goalWps[i] === wpId) return true;
-    }
-    return false;
+    return inGoalStatic(goalWps, wpId);
   };
   var pending = [];
   for (var i = 0; i < goalWps.length; i++) {

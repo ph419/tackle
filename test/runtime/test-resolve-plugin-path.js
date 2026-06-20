@@ -280,3 +280,86 @@ test.describe('resolvePluginPath - integration with real directory structure', (
 
 // Need fs for the integration tests above
 const fs = require('fs');
+
+test.describe('resolvePluginPath - S3 path traversal rejection', () => {
+  test('should reject core source that escapes the repo root via ../..', () => {
+    const pluginsDir = '/project/plugins/core';
+    const registryDir = '/project/plugins';
+    assert.throws(
+      () => resolvePluginPath(
+        { name: 'evil', source: '../../etc/passwd' },
+        pluginsDir,
+        registryDir
+      ),
+      /escapes the repository root/
+    );
+  });
+
+  test('should reject local source that escapes the repo root via ../..', () => {
+    const pluginsDir = '/project/plugins/core';
+    const registryDir = '/project/plugins';
+    assert.throws(
+      () => resolvePluginPath(
+        { name: 'evil', source: '../../etc/passwd', sourceType: 'local' },
+        pluginsDir,
+        registryDir
+      ),
+      /escapes the repository root/
+    );
+  });
+
+  test('should reject source that escapes to the parent of the repo root', () => {
+    const pluginsDir = '/project/plugins/core';
+    const registryDir = '/project/plugins';
+    // /project/plugins + ../.. = /project (one level above repo root /project if root were /project/plugins)
+    // The repo root is path.resolve(registryDir, '..') = /project/plugins.
+    // ../../foo from /project/plugins → /foo which escapes.
+    assert.throws(
+      () => resolvePluginPath(
+        { name: 'evil', source: '../foo/../../../etc' },
+        pluginsDir,
+        registryDir
+      ),
+      /escapes the repository root/
+    );
+  });
+
+  test('should still allow legitimate sibling-directory relative paths', () => {
+    const pluginsDir = '/project/plugins/core';
+    const registryDir = '/project/plugins';
+    // A sibling dir under the repo root (parent of registryDir) is allowed.
+    const result = resolvePluginPath(
+      { name: 'ok', source: '../custom-plugins/my-plugin' },
+      pluginsDir,
+      registryDir
+    );
+    // Should resolve to /project/custom-plugins/my-plugin (within repo root /project/plugins/../)
+    assert.strictEqual(result, path.resolve(registryDir, '../custom-plugins/my-plugin'));
+  });
+
+  test('should allow absolute path even outside the repo root (opt-in)', () => {
+    const pluginsDir = '/project/plugins/core';
+    const registryDir = '/project/plugins';
+    const absPath = path.resolve('/external/somewhere/my-plugin');
+    const result = resolvePluginPath(
+      { name: 'ok', source: absPath, sourceType: 'local' },
+      pluginsDir,
+      registryDir
+    );
+    assert.strictEqual(result, absPath);
+  });
+
+  test('should reject Windows-style .. escapes', () => {
+    const pluginsDir = 'C:\\project\\plugins\\core';
+    const registryDir = 'C:\\project\\plugins';
+    assert.throws(
+      () => resolvePluginPath(
+        { name: 'evil', source: '..\\..\\Windows\\System32' },
+        pluginsDir,
+        registryDir
+      ),
+      /escapes the repository root/
+    );
+  });
+});
+

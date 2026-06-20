@@ -273,19 +273,27 @@ describe('settings-merger', function () {
       }
     });
 
-    it('should overwrite corrupted settings.json', function () {
+    // B3 回归：损坏的 settings.json 必须备份并中止，不得静默覆盖
+    it('B3: 损坏 settings.json → 备份 + 抛错，原文件不被覆盖', function () {
       var claudeDir = path.join(targetRoot, '.claude');
       fs.mkdirSync(claudeDir, { recursive: true });
-      fs.writeFileSync(settingsPath(), 'this is not valid json {', 'utf-8');
+      var corruptContent = 'this is not valid json {';
+      fs.writeFileSync(settingsPath(), corruptContent, 'utf-8');
 
-      merger.mergeSettings({
-        targetRoot: targetRoot,
-        packageRoot: packageRoot,
-      });
+      assert.throws(function () {
+        merger.mergeSettings({
+          targetRoot: targetRoot,
+          packageRoot: packageRoot,
+        });
+      }, /解析失败/);
 
-      var settings = JSON.parse(fs.readFileSync(settingsPath(), 'utf-8'));
-      assert.ok(settings.hooks);
-      assert.ok(settings.hooks.PreToolUse);
+      // 原文件内容必须原样保留（未被覆盖）
+      assert.strictEqual(fs.readFileSync(settingsPath(), 'utf-8'), corruptContent,
+        '损坏的原文件不应被改写');
+      // 应生成 .corrupt.<timestamp> 备份
+      var entries = fs.readdirSync(claudeDir);
+      var backups = entries.filter(function (n) { return n.indexOf('settings.json.corrupt.') === 0; });
+      assert.ok(backups.length >= 1, '应生成 .corrupt 备份文件');
     });
 
     it('should preserve non-hook settings fields', function () {

@@ -31,6 +31,9 @@ module.exports = {
       ['list', 'List all registered plugins'],
       ['interactive', 'Interactive plugin management (alias: i)'],
       ['setup-global', 'Install global skills to ~/.claude/skills/'],
+      ['loop', 'Run the agentic loop driver (Node process-level steady loop)'],
+      ['loop-server', 'Global loop coordinator daemon (multi-loop view, quota, circuit break)'],
+      ['team-cleanup', 'Deterministic agent-team directory cleanup'],
       ['version', 'Show version information'],
       ['help', 'Show this help message'],
     ];
@@ -50,6 +53,27 @@ module.exports = {
     console.log('  --no-color          Disable colored output');
     console.log('  --help, -h          Show this help message');
     console.log('  --version, -v       Show version information');
+    console.log('');
+    console.log(ctx.colorize('loop', 'green') + ' 子命令用法（Agentic Loop Node Driver）：');
+    console.log('  tackle loop <plan.md> [options]');
+    console.log('    --executor=local|claude|glm   provider 路由（默认 local）');
+    console.log('    --loop-id=<name>              per-loop 隔离 + 支持 --loop-id 恢复');
+    console.log('    --max-iters=<N>               最大迭代数（必须 >0）');
+    console.log('    --state-dir=<dir>             隔离 state 目录（默认 .tackle-state）');
+    console.log('    --dry-run                     不执行 executor（调试）');
+    console.log('    --force                       允许恢复已终态的 loop（覆盖终态保护）');
+    console.log('');
+    console.log(ctx.colorize('loop-server', 'green') + ' 子命令用法（全局 loop 协调守护进程）：');
+    console.log('  tackle loop-server start [--state-dir=X] [--interval=N] [--no-circuit]');
+    console.log('                                 轮询守护进程（额度池/全局熔断）');
+    console.log('  tackle loop-server stop  [--state-dir=X]');
+    console.log('                                 停止守护进程（跨平台 kill）');
+    console.log('  tackle loop-server status [--state-dir=X]');
+    console.log('                                 单次全局快照');
+    console.log('  tackle loop-server list   [--state-dir=X]');
+    console.log('                                 status 别名');
+    console.log('  tackle loop-server abort <loop-id> [--state-dir=X] [--reason=...]');
+    console.log('                                 向指定 loop 下发熔断指令');
     console.log('');
     console.log('After running ' + ctx.colorize('tackle-harness build', 'green') + ', skills are available in .claude/skills/');
     console.log('and hooks are registered in .claude/settings.json');

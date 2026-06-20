@@ -2,6 +2,7 @@
 
 var path = require('path');
 var fs = require('fs');
+var os = require('os');
 var HarnessBuild = require('../../plugins/runtime/harness-build');
 
 /**
@@ -17,10 +18,16 @@ module.exports = {
    * @param {object} ctx - CLI context object
    */
   execute: function (ctx) {
-    var homeDir = process.env.HOME || process.env.USERPROFILE;
+    // B16: os.homedir() is the correct cross-platform home resolution.
+    // The previous `process.env.HOME || USERPROFILE` returns a Unix-style
+    // path under Git Bash on Windows (HOME=/c/Users/...), which breaks the
+    // fs APIs expecting a Windows path. os.homedir() always returns the
+    // platform-native path.
+    var homeDir = os.homedir();
     if (!homeDir) {
       console.error(ctx.colorize('Error: Cannot determine home directory', 'red'));
       ctx.exit(1);
+      return; // B16: exit doesn't halt flow by itself; guard the rest.
     }
 
     console.log(ctx.colorize('[tackle-harness] Installing global skills and hooks...', 'cyan'));

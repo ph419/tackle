@@ -86,8 +86,18 @@ module.exports = {
 
     // 4.5. Create settings.json with hook registration (global mode)
     var builder = ctx.createBuilder();
+    // B22: updateSettings may create OR update an existing settings.json.
+    // Snapshot existence before the call so the log message is accurate.
+    var settingsExistedBefore = false;
+    try {
+      settingsExistedBefore = fs.existsSync(ctx.settingsPath);
+    } catch (_e) { /* ignore — treat as not-existing */ }
     builder.updateSettings(ctx.targetRoot, ctx.packageRoot);
-    console.log('[tackle-harness] Created .claude/settings.json with global hook registration');
+    if (settingsExistedBefore) {
+      console.log('[tackle-harness] Updated .claude/settings.json with global hook registration');
+    } else {
+      console.log('[tackle-harness] Created .claude/settings.json with global hook registration');
+    }
 
     // 5. Detect and clean up legacy project-level hooks registration
     var settingsPath = ctx.settingsPath;
@@ -178,5 +188,7 @@ module.exports = {
     }
 
     console.log(ctx.colorize('[tackle-harness] Done! Your project is ready to use tackle-harness.', 'green'));
+    // B21: explicit success exit to match the exit discipline of other commands.
+    ctx.exit(0);
   },
 };

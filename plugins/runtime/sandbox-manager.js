@@ -79,11 +79,10 @@ class SandboxManager {
     /** @type {Map<string, WorkerEntry>} plugin name -> worker entry */
     this._workers = new Map();
 
-    /** @type {Map<string, Function>} pending RPC response handlers */
-    this._pendingRpc = new Map();
-
-    /** @type {number} RPC call ID counter */
-    this._rpcIdCounter = 0;
+    // Note: S3 dead-state cleanup — the previous `_pendingRpc` / `_rpcIdCounter`
+    // fields were declared but never read or written (RPC ids are managed inside
+    // SandboxContext in the worker, not on the main thread). Removed to avoid
+    // implying the main thread tracks pending RPCs (it does not).
   }
 
   // --- Public API ---
@@ -252,15 +251,19 @@ class SandboxManager {
       // Send terminate signal
       entry.worker.postMessage({ type: 'terminate' });
 
-      // Give the worker a short grace period, then force terminate
-      await Promise.race([
-        new Promise(function (resolve) {
-          entry.worker.on('exit', function () { resolve(); });
-          // Also handle the case where exit doesn't fire quickly
-          setTimeout(function () { resolve(); }, 2000);
-        }),
-        entry.worker.terminate(),
-      ]);
+      // Give the worker a short grace period, then force terminate.
+      // The timeout is always cleared (resolve + clearTimeout) so we don't leak
+      // a dangling 2s timer when the worker exits quickly (S3 dead-state cleanup).
+      await new Promise(function (resolve) {
+        var graceTimer;
+        function done() {
+          if (graceTimer) clearTimeout(graceTimer);
+          resolve();
+        }
+        entry.worker.once('exit', done);
+        entry.worker.terminate().then(done, done);
+        graceTimer = setTimeout(done, 2000);
+      });
     } catch (err) {
       // Force terminate on error
       try {

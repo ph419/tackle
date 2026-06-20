@@ -4,6 +4,8 @@
 
 本文档描述 Tackle Harness 的所有公共 API、实验性 API 和内部 API，帮助开发者判断哪些接口可安全依赖。
 
+> **范围说明**：本文档覆盖 v0.1.x 奠定的插件框架 / 运行时核心（harness-build、plugin-loader、state-store 等）。v0.3.x 起的 **Agentic Loop 运行时模块**（`provider-loop-engine`、`loop-snapshot`、`reflection-evaluator`、`loop-coordinator`、`loop-actuator`、`loop-report`、`plan-reader`）以及 v0.3.4~v0.3.6 的 **Node Driver 层**（`loop-executor`、`executor-local`、`executor-claude`、`executor-glm`、`loop-server-core`）的接口契约与设计约束，统一记录在 [`docs/reports/agentic-loop-design.md`](../reports/agentic-loop-design.md)（核心循环 §1~§10、Node Driver + provider 解耦 §11）与 [`docs/plan/agentic-loop-node-driver(-m4m5).md`](../plan/agentic-loop-node-driver.md)。本文档不重复展开。
+
 ## 目录
 
 - [概述](#概述)

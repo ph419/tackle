@@ -114,15 +114,28 @@ function computeDivergenceStreak(seq, curProximity) {
 function failedCountFromChecklist(chk) {
   if (!chk) return null;
   var summary = chk.summary || {};
-  if (typeof summary.failed === 'number') return summary.failed;
+  if (typeof summary.failed === 'number') return _clampFailed(summary.failed);
   if (chk.failedItems && typeof chk.failedItems.length === 'number') {
-    return chk.failedItems.length;
+    return _clampFailed(chk.failedItems.length);
   }
   // summary 仅有 total/passed → 推导
   var total = typeof summary.total === 'number' ? summary.total : 0;
   var passed = typeof summary.passed === 'number' ? summary.passed : 0;
-  if (total > 0) return total - passed;
+  if (total > 0) return _clampFailed(total - passed);
   return null;
+}
+
+/**
+ * Clamp a derived failed count to a non-negative integer.
+ * B19: when a buggy/lying checklist reports passed > total, total - passed
+ * goes negative, which corrupts computeRefineProgress. Floor at 0.
+ * @internal
+ * @param {number} n
+ * @returns {number}
+ */
+function _clampFailed(n) {
+  if (typeof n !== 'number' || isNaN(n)) return 0;
+  return n < 0 ? 0 : Math.floor(n);
 }
 
 /**
@@ -139,6 +152,40 @@ function prevFailedCountFromHistory(state) {
     return last.eval.failedCount;
   }
   return null;
+}
+
+/**
+ * 计算连续"无代码进展"轮数（noProgressStreak，WP-191-2-impl）。
+ *
+ * 与 proximity-based divergenceStreak 协同构成发散判据（对齐 Ralph 熔断）：
+ *   - proximity 不升 OR 无代码进展，任一连续 N 轮 → diverged
+ *
+ * 从 history 末尾向前数：连续多少轮 eval.noProgress === true。当前轮 noProgress
+ * 由入参 curNoProgress 提供（尚未写入 history），seq 为"截至上一轮"的历史。
+ *
+ * 向后兼容：旧 history 无 noProgress 字段（首轮 / 降级 / executor 未产信号）→
+ * 该轮视为 noProgress=false（不累计），避免误判。
+ *
+ * @param {object} state 含 history（每项 eval.noProgress 可选）
+ * @param {boolean} [curNoProgress] 当前轮 noProgress（默认 false）
+ * @returns {number} 连续无进展轮数
+ */
+function noProgressStreakFromHistory(state, curNoProgress) {
+  // 当前轮有进展（noProgress=false）→ 打断累计，streak 归零
+  // （与 proximity streak "末尾连续不增"语义一致：本轮改善即断链）
+  if (curNoProgress !== true) return 0;
+  var streak = 1; // 当前轮计入
+  if (!state || !state.history || !state.history.length) return streak;
+  // 从末尾（最近一轮）向前数连续 true；遇到首个非 true 即停
+  for (var i = state.history.length - 1; i >= 0; i--) {
+    var entry = state.history[i];
+    if (entry && entry.eval && entry.eval.noProgress === true) {
+      streak += 1;
+    } else {
+      break;
+    }
+  }
+  return streak;
 }
 
 /**
@@ -427,7 +474,23 @@ module.exports = {
     if (refineProgressed) {
       streak = 0;
     }
-    var diverged = streak >= thresholds.divergence_threshold;
+
+    // ---- 无代码进展信号（WP-191-2-impl，对齐 Ralph 熔断判据）----
+    // curNoProgress 取自 executor 写入的 chk.noProgress（工作树脏度判定，见
+    // executor-claude.applyProgressDetection）；缺字段时视为 false（不误判）。
+    var curNoProgress = !!(chk && chk.noProgress === true);
+    var noProgressStreak = noProgressStreakFromHistory(state, curNoProgress);
+    // 已达成态不累计无进展（与 proximity streak 一致的宽容）
+    if (proximity >= thresholds.proximity_goal && allPassed) {
+      noProgressStreak = 0;
+    }
+
+    // ---- 发散判定（协同：proximity 不升 OR 无进展，任一连续 N 轮 → diverged）----
+    //   proximityStreak：连续 proximity 不增（含 refineProgressed 宽容归零）
+    //   noProgressStreak：连续无代码进展
+    //   两者并行累计，任一达阈值即发散——保留现有 proximity-based 语义不破坏。
+    var diverged = streak >= thresholds.divergence_threshold ||
+      noProgressStreak >= thresholds.divergence_threshold;
 
     var iteration = typeof state.iteration === 'number' ? state.iteration : 0;
 
@@ -438,6 +501,11 @@ module.exports = {
       converged: converged,
       diverged: diverged,
       divergenceStreak: streak,
+      // 无代码进展信号（WP-191-2-impl）：curNoProgress 来自 chk.noProgress，
+      // noProgressStreak 来自 history 累计；engine step() 写回 history.eval.noProgress
+      // 闭合反馈环。diverged = proximity 发散 OR noProgress 发散（任一连续 N 轮）。
+      noProgress: curNoProgress,
+      noProgressStreak: noProgressStreak,
       trend: trend,
       categoryScores: categoryScores,
       failingDrivers: failingDrivers,
@@ -462,6 +530,7 @@ module.exports = {
   _computeTrend: computeTrend,
   _failedCountFromChecklist: failedCountFromChecklist,
   _prevFailedCountFromHistory: prevFailedCountFromHistory,
+  _noProgressStreakFromHistory: noProgressStreakFromHistory,
   _computeRefineProgress: computeRefineProgress,
   _proximityFromChecklist: proximityFromChecklist,
   _categoryScoresFromChecklist: categoryScoresFromChecklist,

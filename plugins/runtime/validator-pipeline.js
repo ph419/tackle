@@ -200,7 +200,10 @@ ValidatorPipeline.prototype.runAllValidators = async function runAllValidators(o
   options = options || {};
   var phase = options.phase || WorkflowPhase.MANUAL;
   var defaultMode = options.mode || ExecutionMode.BLOCKING;
-  var stopOnFirstError = options.stopOnFirstError !== false;
+  // B5: default false per JSDoc above (was previously true due to `!== false`
+  // idiom evaluating undefined → true). Callers that want short-circuit
+  // behavior must pass stopOnFirstError: true explicitly.
+  var stopOnFirstError = options.stopOnFirstError === true;
 
   this._log('info', 'Running all validators for phase: ' + phase);
 

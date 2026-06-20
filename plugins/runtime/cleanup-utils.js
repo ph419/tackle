@@ -16,6 +16,7 @@
 
 var path = require('path');
 var fs = require('fs');
+var safePath = require('./safe-path');
 
 // ---------------------------------------------------------------------------
 // Hook name derivation from registry
@@ -191,6 +192,11 @@ function cleanupProjectSkills(projectSkillsDir, registryPath, packageRoot) {
       var skillPath = path.join(projectSkillsDir, skillName);
 
       if (globalSkillNames[skillName]) {
+        // S5：拒绝符号链接/junction，避免 rmSync(recursive) 顺着链接递归删除目标。
+        // .claude/skills/ 下的合法 skill 都是普通目录，不应为 symlink。
+        if (safePath.isSymlink(skillPath)) {
+          continue;
+        }
         fs.rmSync(skillPath, { recursive: true, force: true });
         removedSkills.push(skillName);
       }
@@ -231,6 +237,10 @@ function cleanupProjectHooks(projectHooksDir, registryPath, packageRoot) {
     for (var i = 0; i < tackleHooks.length; i++) {
       var hookPath = path.join(projectHooksDir, tackleHooks[i]);
       if (fs.existsSync(hookPath)) {
+        // S5：拒绝符号链接/junction，避免 rmSync(recursive) 删除链接目标
+        if (safePath.isSymlink(hookPath)) {
+          continue;
+        }
         fs.rmSync(hookPath, { recursive: true, force: true });
         removedHooks.push(tackleHooks[i]);
       }

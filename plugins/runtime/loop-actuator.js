@@ -124,9 +124,11 @@ function resolveStore(context) {
   if (context && typeof context.getProvider === 'function') {
     try {
       var maybe = context.getProvider('provider:state-store');
-      // async getProvider（返回 Promise）无法在同步 resolveStore 内消费，降级
+      // B18/A1：async getProvider（返回 Promise）无法在同步 resolveStore 内消费。
+      // 明确吞掉 rejection 避免 unhandledRejection，然后降级。
       if (maybe && typeof maybe.then === 'function') {
-        // 降级到本地 store
+        maybe.then(function () { /* provider resolved after fallback; ignore */ },
+                   function (_e) { /* provider rejected; fallback in use */ });
       } else if (maybe && (typeof maybe.get === 'function' || typeof maybe.set === 'function')) {
         return { store: wrapProviderStore(maybe), injected: true };
       }
@@ -136,6 +138,10 @@ function resolveStore(context) {
   }
 
   // 3) 本地 StateStore
+  // A1 NOTE：跨 loop 物理隔离由调用方负责（bin/commands/loop.js 的
+  // resolveLoopWorkspace 在 <stateDir>/<loopId>/ 下建立独立 workspaceRoot，
+  // engine 的 StateStore 即用 workspaceRoot/'.claude-state'，天然分桶）。
+  // 此处保持扁平回退以与 engine 写入同一文件，避免状态分裂。
   try {
     var root = resolveProjectRoot();
     return {

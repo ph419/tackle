@@ -96,7 +96,19 @@ function mergeSettings(options) {
     try {
       settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
     } catch (e) {
-      settings = {};
+      // B3：损坏的 settings.json 不能静默重置（会丢失用户的多 matcher/多 command 配置）。
+      // 先备份原文件，再抛错让调用方中止——绝不直接覆盖。
+      var backupPath = settingsPath + '.corrupt.' + Date.now();
+      try {
+        fs.copyFileSync(settingsPath, backupPath);
+      } catch (_backupErr) {
+        // 备份失败也不掩盖问题：仍抛错（备份路径仅用于提示）
+      }
+      throw new Error(
+        'settings.json 解析失败，已停止以避免覆盖用户配置。' +
+        '原文件已备份到 ' + backupPath + '。解析错误：' + (e && e.message ? e.message : String(e)) +
+        '。请修正后重试。'
+      );
     }
   }
 

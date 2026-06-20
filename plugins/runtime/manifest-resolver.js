@@ -38,12 +38,21 @@ var MANIFEST_VERSION = '1.0.0';
 
 // Read package.json for version
 var packageJsonPath = path.resolve(__dirname, '../../package.json');
-var TACKLE_HARNESS_VERSION = '0.0.19';
+// B14: previous fallback was a stale hardcoded '0.0.19' that would be written
+// to generated manifests if package.json read failed. Use '0.0.0' so a failed
+// read is OBVIOUSLY wrong (rather than silently writing a misleading semver),
+// and surface a warning so operators notice.
+var TACKLE_HARNESS_VERSION = '0.0.0';
 try {
   var pkg = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
   TACKLE_HARNESS_VERSION = pkg.version || TACKLE_HARNESS_VERSION;
 } catch (e) {
-  // Use default version
+  // B14: explicit warning — a silent fallback to a stale version is worse
+  // than an obvious '0.0.0' that signals the read failed.
+  if (typeof console !== 'undefined' && console.warn) {
+    console.warn('[manifest-resolver] Could not read package.json for version (' +
+      e.message + '); falling back to "0.0.0".');
+  }
 }
 
 /**

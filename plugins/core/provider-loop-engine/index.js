@@ -737,6 +737,9 @@ class LoopEngineProvider extends ProviderPlugin {
             // prevFailedCountFromHistory 读取，驱动发散宽容（部分改进不计入 streak）。
             failedCount: (typeof evalResult.failedCount === 'number')
               ? evalResult.failedCount : null,
+            // 无代码进展信号（WP-191-2-impl）：下轮 reflection-evaluator 经
+            // noProgressStreakFromHistory 读取，累计 noProgressStreak 驱动发散熔断。
+            noProgress: evalResult.noProgress === true,
           },
           verdict: verdict.verdict,
           timestamp: nowIso(),
@@ -959,12 +962,23 @@ class LoopEngineProvider extends ProviderPlugin {
     }
 
     // ② 发散（连续 N 轮无进展，design.md §6.3.1）
+    //    协同判据（WP-191-2-impl，对齐 Ralph 熔断）：proximity 不升 OR 无代码进展，
+    //    任一连续 divergence_threshold 轮 → diverged。保留现有 proximity streak 语义，
+    //    并列消费 evaluator 计算的 noProgressStreak（来自 executor 工作树脏度信号）。
     var streak = evalResult.divergenceStreak;
     if (streak === undefined || streak === null) streak = state.divergenceStreak || 0;
-    if (streak >= this._config.divergence_threshold) {
+    var noProgressStreak = (typeof evalResult.noProgressStreak === 'number')
+      ? evalResult.noProgressStreak : 0;
+    // 阈值统一取 engine 运行时 _config（含 init override），不直接采信 evaluator 的
+    // diverged 字段——evaluator 用 DEFAULT_THRESHOLDS，会让其默认阈值 3 绕过 engine
+    // 的 override（如测试 configOverride divergence_threshold=99）。两类 streak 都按
+    // engine 阈值判定，与原版 proximity-only 行为一致，noProgress 协同同此阈值。
+    if (streak >= this._config.divergence_threshold ||
+        noProgressStreak >= this._config.divergence_threshold) {
       return {
         verdict: 'diverged',
-        reason: '连续 ' + streak + ' 轮 proximity 无进展（>= divergence_threshold ' +
+        reason: '发散：proximity 连续 ' + streak + ' 轮无进展 / 无代码进展连续 ' +
+          noProgressStreak + ' 轮（>= divergence_threshold ' +
           this._config.divergence_threshold + '）',
       };
     }

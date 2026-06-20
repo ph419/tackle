@@ -9,6 +9,7 @@
 
 var path = require('path');
 var fs = require('fs');
+var safePath = require('../plugins/runtime/safe-path');
 var createContext = require('./context').createContext;
 
 var packageJson = require('../package.json');
@@ -29,8 +30,13 @@ var flags = {
 };
 
 var filteredArgs = [];
+// B10: helper to detect flag-shaped args so `--root --verbose` doesn't
+// consume `--verbose` as the root path.
+function _isFlag(arg) {
+  return typeof arg === 'string' && arg.indexOf('--') === 0;
+}
 for (var i = 0; i < args.length; i++) {
-  if (args[i] === '--root' && args[i + 1]) {
+  if (args[i] === '--root' && args[i + 1] && !_isFlag(args[i + 1])) {
     flags.root = args[++i];
   } else if (args[i] === '--verbose') {
     flags.verbose = true;
@@ -84,7 +90,8 @@ if (flags.root) {
   }
 
   var cwdResolved = path.resolve(flags.root);
-  if (cwdResolved.indexOf(process.cwd()) !== 0 && command !== 'init') {
+  // S6：用 isWithin 替代 indexOf===0，避免 /foo 误判为 /foobar 父目录
+  if (!safePath.isWithin(process.cwd(), cwdResolved) && command !== 'init') {
     console.warn(colorize('Warning: --root path is outside current working directory', 'yellow'));
   }
 
@@ -114,6 +121,8 @@ var commandModules = {
   'help': 'help.js',
   'install': 'install.js',
   'team-cleanup': 'team-cleanup.js',
+  'loop': 'loop.js',
+  'loop-server': 'loop-server.js',
 };
 
 function loadCommand(cmdName) {
@@ -173,13 +182,35 @@ if (!cmdModule) {
   process.exit(1);
 }
 
-// Create context and execute
+// Create context and execute.
+// argv: command arguments after the command name (e.g. ['plan.md','--executor=local']).
 var context = createContext({
   packageRoot: packageRoot,
   targetRoot: targetRoot,
   flags: flags,
   command: command,
   packageVersion: PACKAGE_VERSION,
+  argv: filteredArgs.slice(1),
 });
 
-cmdModule.execute(context);
+// #11：顶层错误兜底——命令可能同步抛错（如 team-cleanup 的非法输入），
+// 也可能返回被 reject 的 Promise（如 loop/loop-server 异步命令）。
+// 任一情况都给出干净的退出码 + 错误信息，而非裸露的 Node 堆栈/unhandledRejection。
+function failCommand(err) {
+  var msg = err && err.message ? err.message : String(err);
+  console.error(colorize('Error: ' + msg, 'red'));
+  process.exit(1);
+}
+
+try {
+  var result = cmdModule.execute(context);
+  // 异步命令：result 是 Promise（或 thenable）→ 捕获 rejection
+  if (result && typeof result.then === 'function') {
+    result.then(function (exitEarly) {
+      // 命令可能 resolve 一个退出码（约定 truthy 即视为已 exit；正常 resolve 无需动作）
+      if (exitEarly && typeof exitEarly === 'number') process.exit(exitEarly);
+    }, failCommand);
+  }
+} catch (err) {
+  failCommand(err);
+}

@@ -101,14 +101,17 @@ class FileSystemAdapter {
    * SECURITY: Uses unique temp file names to prevent collision and
    * sets secure file permissions (owner read/write only).
    *
+   * A1 (Windows robustness): `fs.renameSync` is atomic on POSIX but can fail
+   * with EPERM/EACCES on Windows when the target file is briefly held open by
+   * another process (antivirus scan, concurrent reader, indexer). On those
+   * specific errors we fall back to a non-atomic write+unlink so the store
+   * remains writable on the primary platform instead of throwing.
+   *
    * @param {object} data - serializable state object
    */
   write(data) {
     var dir = path.dirname(this.filePath);
-    if (!fs.existsSync(dir)) {
-      // Create directory with secure permissions (owner read/write/execute only)
-      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    }
+    this._ensureDir(dir);
 
     // Atomic write: write to temp file with unique name, then rename
     // Use PID and timestamp for uniqueness to prevent collisions in concurrent scenarios
@@ -124,7 +127,20 @@ class FileSystemAdapter {
 
       // Atomic rename (overwrites target if exists)
       // This is atomic on most filesystems (POSIX, Windows)
-      fs.renameSync(tempPath, this.filePath);
+      try {
+        fs.renameSync(tempPath, this.filePath);
+      } catch (renameErr) {
+        // A1: Windows EPERM/EACCES when target is held by another process
+        // (AV scan / concurrent read). Fall back to direct write + unlink temp.
+        if (this._isWindowsRenameRetryable(renameErr)) {
+          this._warn('Atomic rename failed (' + renameErr.code + '), falling back to direct write');
+          // Direct overwrite of the target (NOT atomic, but preserves data).
+          fs.writeFileSync(this.filePath, content, { encoding: 'utf-8', mode: 0o600 });
+          try { fs.unlinkSync(tempPath); } catch (_e) { /* temp already gone */ }
+        } else {
+          throw renameErr;
+        }
+      }
     } catch (err) {
       // Clean up temp file if something went wrong
       try {
@@ -136,6 +152,97 @@ class FileSystemAdapter {
       }
       throw err;
     }
+  }
+
+  /**
+   * Ensure the parent directory of the state file exists.
+   *
+   * A1 migration: if any ancestor of `dir` already exists as a *file* (legacy
+   * pre-A1 installs used `.claude-state` as a single flat file), rename it
+   * aside to `.legacy-flat.<ts>` and create the directory. This lets the
+   * per-loopId sharded layout take over without data loss.
+   * @internal
+   * @param {string} dir
+   */
+  _ensureDir(dir) {
+    if (this._isDir(dir)) return;
+
+    // Walk up to find any ancestor that exists as a FILE (blocking mkdir -p).
+    // e.g. filePath=/a/.claude-state/L1/state.json → dir=/a/.claude-state/L1
+    //      if /a/.claude-state is a flat file, we must move it aside first.
+    var blockers = this._fileAncestorBlockers(dir);
+    for (var i = 0; i < blockers.length; i++) {
+      var b = blockers[i];
+      var legacyPath = b + '.legacy-flat.' + Date.now() + '.' + i;
+      try {
+        fs.renameSync(b, legacyPath);
+        this._warn('Migrated legacy flat state file "' + b + '" to "' + legacyPath +
+          '" to enable per-loop directory layout.');
+      } catch (e) {
+        throw new Error('Cannot create state directory "' + dir + '": a file ("' + b +
+          '") occupies an ancestor path and could not be moved (' + e.message + ')');
+      }
+    }
+
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  }
+
+  /**
+   * Return any ancestors of `dir` that exist as files (would block mkdir -p).
+   * Walks from `dir` up to the filesystem root. Returns the blockers
+   * outermost-first so parents are moved before children.
+   * @internal
+   * @param {string} dir
+   * @returns {string[]}
+   */
+  _fileAncestorBlockers(dir) {
+    var blockers = [];
+    var current = path.resolve(dir);
+    var root = path.parse(current).root;
+    var guard = 0;
+    while (current && current !== root && guard < 64) {
+      guard++;
+      try {
+        var stat = fs.statSync(current);
+        if (stat.isFile()) {
+          blockers.push(current);
+        } else if (stat.isDirectory()) {
+          // Existing directory ancestor — nothing above it can block us.
+          break;
+        }
+      } catch (_e) {
+        // Doesn't exist yet — keep walking up.
+      }
+      var parent = path.dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+    // Reverse so we move the outermost blocker first (parent before child).
+    blockers.reverse();
+    return blockers;
+  }
+
+  /**
+   * True if `p` exists and is a directory.
+   * @internal
+   * @param {string} p
+   * @returns {boolean}
+   */
+  _isDir(p) {
+    try { return fs.statSync(p).isDirectory(); } catch (_e) { return false; }
+  }
+
+  /**
+   * Decide whether a rename failure should trigger the Windows fallback path.
+   * Only transient "target busy" class errors qualify — other errors (ENOSPC,
+   * ENOENT, EROFS, etc.) must still surface.
+   * @internal
+   * @param {Error & {code?: string}} err
+   * @returns {boolean}
+   */
+  _isWindowsRenameRetryable(err) {
+    if (!err || !err.code) return false;
+    return err.code === 'EPERM' || err.code === 'EACCES' || err.code === 'EBUSY';
   }
 }
 
@@ -309,6 +416,10 @@ class StateStore {
     var parts = key.split('.');
     var current = obj;
     for (var i = 0; i < parts.length; i++) {
+      // S7：拒绝 __proto__/constructor/prototype 段，避免读取/污染原型链
+      if (parts[i] === '__proto__' || parts[i] === 'constructor' || parts[i] === 'prototype') {
+        return undefined;
+      }
       if (current === null || current === undefined || typeof current !== 'object') {
         return undefined;
       }
@@ -329,12 +440,20 @@ class StateStore {
     var parts = key.split('.');
     var current = obj;
     for (var i = 0; i < parts.length - 1; i++) {
+      // S7：拒绝原型污染段，写入 __proto__/constructor/prototype 视为 no-op
+      if (parts[i] === '__proto__' || parts[i] === 'constructor' || parts[i] === 'prototype') {
+        return;
+      }
       if (typeof current[parts[i]] !== 'object' || current[parts[i]] === null) {
         current[parts[i]] = {};
       }
       current = current[parts[i]];
     }
-    current[parts[parts.length - 1]] = value;
+    var last = parts[parts.length - 1];
+    if (last === '__proto__' || last === 'constructor' || last === 'prototype') {
+      return;
+    }
+    current[last] = value;
   }
 
   /**
@@ -347,12 +466,20 @@ class StateStore {
     var parts = key.split('.');
     var current = obj;
     for (var i = 0; i < parts.length - 1; i++) {
+      // S7：拒绝原型污染段
+      if (parts[i] === '__proto__' || parts[i] === 'constructor' || parts[i] === 'prototype') {
+        return;
+      }
       if (typeof current[parts[i]] !== 'object' || current[parts[i]] === null) {
         return; // path doesn't exist, nothing to delete
       }
       current = current[parts[i]];
     }
-    delete current[parts[parts.length - 1]];
+    var last = parts[parts.length - 1];
+    if (last === '__proto__' || last === 'constructor' || last === 'prototype') {
+      return;
+    }
+    delete current[last];
   }
 
   /**

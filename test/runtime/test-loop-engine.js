@@ -663,6 +663,72 @@ test.describe('decide 优先级', function () {
     }
   });
 
+  // ─────────────────────────────────────────────
+  // noProgress 协同熔断（WP-191-2-impl）：engine _decide 并列消费 noProgressStreak，
+  // 与 proximity streak 协同——任一连续 divergence_threshold 轮 → diverged。
+  // ─────────────────────────────────────────────
+
+  test('noProgressStreak 达阈值 → diverged（即使 proximity streak=0）', async function () {
+    var env = await makeEngine({ getProvider: function () { return null; } });
+    try {
+      var res = await env.api.init({});
+      var st = await env.api.getState(res.loopId);
+      st.iteration = 2; // 远低于上限，排除 timeout 干扰
+      await env.provider._store.set('loop.' + res.loopId, st);
+
+      // proximity streak=0（在升），但 noProgressStreak=3（连续无代码进展）→ 协同熔断
+      var verdict = await env.api.decide(res.loopId, {
+        divergenceStreak: 0, noProgressStreak: 3, proximity: 0.6, allPassed: false,
+      });
+      assert.strictEqual(verdict.verdict, 'diverged', 'noProgress 协同熔断生效');
+    } finally {
+      env.restore();
+    }
+  });
+
+  test('engine 阈值权威：evalResult.diverged=true 但 streak 未达 engine 阈值 → 不发散', async function () {
+    // 防回归：engine 必须用自己的 _config.divergence_threshold 判定，不能被 evaluator
+    // 的 diverged 字段（用 DEFAULT_THRESHOLDS=3）短路。e2e configOverride=99 依赖此行为。
+    var env = await makeEngine({ getProvider: function () { return null; } });
+    try {
+      var res = await env.api.init({});
+      var st = await env.api.getState(res.loopId);
+      st.iteration = 1;
+      st.lastSnapshot = { workPackages: { total: 2, pending: ['WP-1'], completed: [], failed: [], blocked: [] } };
+      await env.provider._store.set('loop.' + res.loopId, st);
+      // 把 engine 阈值抬高到 99（模拟 configOverride）
+      env.provider._config.divergence_threshold = 99;
+
+      // evaluator 报 diverged=true（其默认阈值 3），streak=3，但 engine 阈值 99 → 不发散
+      var verdict = await env.api.decide(res.loopId, {
+        divergenceStreak: 3, noProgressStreak: 3, diverged: true, proximity: 0.5, allPassed: false,
+      });
+      assert.strictEqual(verdict.verdict, 'continue', 'engine 阈值权威，不被 evaluator.diverged 短路');
+    } finally {
+      env.provider._config.divergence_threshold = 3;
+      env.restore();
+    }
+  });
+
+  test('noProgressStreak 未达阈值 + proximity 也未达 → 继续', async function () {
+    var env = await makeEngine({ getProvider: function () { return null; } });
+    try {
+      var res = await env.api.init({});
+      var st = await env.api.getState(res.loopId);
+      st.iteration = 1;
+      // 无 pending/failed → 排除 achieved；构造"继续"场景
+      st.lastSnapshot = { workPackages: { total: 2, pending: ['WP-1'], completed: [], failed: [], blocked: [] } };
+      await env.provider._store.set('loop.' + res.loopId, st);
+
+      var verdict = await env.api.decide(res.loopId, {
+        divergenceStreak: 1, noProgressStreak: 2, proximity: 0.5, allPassed: false,
+      });
+      assert.strictEqual(verdict.verdict, 'continue', '两 streak 均未达阈值 → 继续');
+    } finally {
+      env.restore();
+    }
+  });
+
   test('上限 优先于 达成（iteration 达上限时即便全过也判 timeout）', async function () {
     var env = await makeEngine({ getProvider: function () { return null; } });
     try {

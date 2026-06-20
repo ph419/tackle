@@ -1,16 +1,27 @@
 # Claude Code (build output + runtime)
 .claude/
 .claude-state
+.claude-state.*/
 .claude-daemon/
 CLAUDE.md
 
 # Docs
 docs/*
 !docs/design/
-task.md
+# task.md 是项目主规划文档，必须保持 git 跟踪以防误删。
+# 切勿对它执行 `git rm`/`git rm --cached`，也不要在 .gitignore 中忽略它。
+
+# PROGRESS.md 是 loop driver 运行时写入的进度状态文件（每次运行改写，无版本控制价值）。
+# per-loop 隔离目录里的 PROGRESS.md 已由上方 .claude-state* 规则覆盖；此处只忽略仓库根的这一份。
+/PROGRESS.md
 
 # Node
 node_modules/
+
+# Coverage (H3: CI writes coverage.txt at repo root)
+coverage.txt
+coverage/
+.nyc_output/
 
 # Python
 __pycache__/

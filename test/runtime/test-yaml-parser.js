@@ -64,6 +64,18 @@ describe('parseValue()', function () {
     assert.strictEqual(yp.parseValue("'hello world'"), 'hello world');
   });
 
+  it('B12: lone quote char is NOT truncated to empty string', function () {
+    // A single '"' or "'" should be returned verbatim, not stripped to ''.
+    assert.strictEqual(yp.parseValue('"'), '"', 'lone double quote returned verbatim');
+    assert.strictEqual(yp.parseValue("'"), "'", 'lone single quote returned verbatim');
+  });
+
+  it('B12: unbalanced leading quote is returned verbatim', function () {
+    // '"hello' (no closing quote) must not be stripped.
+    assert.strictEqual(yp.parseValue('"hello'), '"hello');
+    assert.strictEqual(yp.parseValue("say'hi"), "say'hi");
+  });
+
   it('should return plain string when it is not a known scalar or number', function () {
     assert.strictEqual(yp.parseValue('auto'), 'auto');
     assert.strictEqual(yp.parseValue('some value'), 'some value');
@@ -290,5 +302,157 @@ describe('Security limits', function () {
     var yaml = 'section:\n  level1:\n    level2:\n      value: 42';
     var result = yp.parseYamlString(yaml);
     assert.strictEqual(result.section.level1.level2.value, 42);
+  });
+});
+
+// ─────────────────────────────────────────────
+// S8/A3/B4: parseSimpleYaml (consolidated shared parser)
+// ─────────────────────────────────────────────
+
+describe('parseSimpleYaml - S8/A3/B4 consolidated parser', function () {
+  it('B4: should parse a top-level scalar array (triggers)', function () {
+    // Previously config-manager's parseSimpleYaml returned {} here, losing data.
+    var yaml = 'triggers:\n  - foo\n  - bar\n  - baz\n';
+    var result = yp.parseSimpleYaml(yaml);
+    assert.ok(Array.isArray(result.triggers), 'triggers should be an array');
+    assert.deepStrictEqual(result.triggers, ['foo', 'bar', 'baz']);
+  });
+
+  it('B4: should parse a scalar array nested under a section', function () {
+    var yaml = 'gating:\n  blocked_states:\n    - waiting\n    - paused\n';
+    var result = yp.parseSimpleYaml(yaml);
+    assert.deepStrictEqual(result.gating.blocked_states, ['waiting', 'paused']);
+  });
+
+  it('should parse flat key-value pairs', function () {
+    var yaml = 'name: task-creator\nversion: 1.0\ndescription: hi\n';
+    var result = yp.parseSimpleYaml(yaml);
+    assert.strictEqual(result.name, 'task-creator');
+    assert.strictEqual(result.version, 1);
+    assert.strictEqual(result.description, 'hi');
+  });
+
+  it('should parse nested objects', function () {
+    var yaml = 'context_window:\n  max_tokens: 200000\n  strategy: auto\n';
+    var result = yp.parseSimpleYaml(yaml);
+    assert.strictEqual(result.context_window.max_tokens, 200000);
+    assert.strictEqual(result.context_window.strategy, 'auto');
+  });
+
+  it('should parse list-of-objects with multi-line items', function () {
+    var yaml = 'stages:\n  - id: planning\n    name: Plan\n    checkpoint: true\n  - id: review\n    name: Review\n';
+    var result = yp.parseSimpleYaml(yaml);
+    assert.ok(Array.isArray(result.stages));
+    assert.strictEqual(result.stages.length, 2);
+    assert.strictEqual(result.stages[0].id, 'planning');
+    assert.strictEqual(result.stages[0].name, 'Plan');
+    assert.strictEqual(result.stages[0].checkpoint, true);
+    assert.strictEqual(result.stages[1].id, 'review');
+  });
+
+  it('should parse deeply-nested list-of-objects (schedule example)', function () {
+    var yaml = 'schedules:\n  - name: peak\n    time_range:\n      start: "14:00"\n      end: "18:00"\n    max_concurrent: 3\n';
+    var result = yp.parseSimpleYaml(yaml);
+    assert.strictEqual(result.schedules[0].name, 'peak');
+    assert.strictEqual(result.schedules[0].time_range.start, '14:00');
+    assert.strictEqual(result.schedules[0].max_concurrent, 3);
+  });
+
+  it('should parse inline flow arrays (skills: ["a", "b"])', function () {
+    var yaml = 'stage:\n  skills: ["task-creator", "split-work-package"]\n';
+    var result = yp.parseSimpleYaml(yaml);
+    assert.deepStrictEqual(result.stage.skills, ['task-creator', 'split-work-package']);
+  });
+
+  it('should strip inline comments outside quotes', function () {
+    var yaml = 'url: http://x.com # link\nkey: value #note\n';
+    var result = yp.parseSimpleYaml(yaml);
+    assert.strictEqual(result.url, 'http://x.com');
+    assert.strictEqual(result.key, 'value');
+  });
+
+  it('should not strip # inside quoted strings', function () {
+    var yaml = 'hash: "abc#def"\n';
+    var result = yp.parseSimpleYaml(yaml);
+    assert.strictEqual(result.hash, 'abc#def');
+  });
+
+  it('should parse quoted strings, booleans, null, numbers', function () {
+    var yaml = 's: hello\nn: 42\nb: true\nf: 3.14\nz: ~\nq: "hi there"\n';
+    var result = yp.parseSimpleYaml(yaml);
+    assert.strictEqual(result.s, 'hello');
+    assert.strictEqual(result.n, 42);
+    assert.strictEqual(result.b, true);
+    assert.strictEqual(result.f, 3.14);
+    assert.strictEqual(result.z, null);
+    assert.strictEqual(result.q, 'hi there');
+  });
+
+  it('S8: should enforce MAX_YAML_SIZE on parseSimpleYaml', function () {
+    var huge = 'k: ' + 'x'.repeat(yp.MAX_YAML_SIZE) + '\n';
+    assert.throws(function () {
+      yp.parseSimpleYaml(huge);
+    }, /maximum allowed size/);
+  });
+
+  it('S8: should enforce MAX_DEPTH on parseSimpleYaml', function () {
+    var yaml = 'a:\n';
+    var indent = '';
+    for (var i = 0; i < 15; i++) {
+      indent += '  ';
+      yaml += indent + 'k' + i + ':\n';
+    }
+    assert.throws(function () {
+      yp.parseSimpleYaml(yaml);
+    }, /maximum allowed depth/);
+  });
+
+  it('S8: should reject __proto__/constructor/prototype keys (S7 guard)', function () {
+    var yaml = '__proto__:\n  polluted: true\nconstructor:\n  prototype:\n    evil: 1\n';
+    var result = yp.parseSimpleYaml(yaml);
+    assert.strictEqual(Object.prototype.polluted, undefined, 'no prototype pollution');
+    assert.strictEqual(({}).evil, undefined);
+    // Keys are sanitized to '_'
+    assert.ok(result.hasOwnProperty('_'), 'poison keys renamed');
+  });
+
+  it('S8: should return {} for non-string input', function () {
+    assert.deepStrictEqual(yp.parseSimpleYaml(null), {});
+    assert.deepStrictEqual(yp.parseSimpleYaml(undefined), {});
+    assert.deepStrictEqual(yp.parseSimpleYaml(42), {});
+  });
+
+  it('should parse the real example harness-config.yaml structure', function () {
+    var yaml = [
+      'context_window:',
+      '  max_tokens: 200000',
+      '  safety_margin: 40000',
+      '  thresholds:',
+      '    small: 200',
+      '    medium: 800',
+      'workflow:',
+      '  default:',
+      '    name: "std"',
+      '    stages:',
+      '      - id: "planning"',
+      '        name: "Plan"',
+      '        skills: ["task-creator", "split-work-package"]',
+      '        checkpoint: true',
+      '      - id: "implementation"',
+      '        skills: ["agent-dispatcher"]',
+      '        checkpoint: false',
+      'agent_dispatcher:',
+      '  concurrency:',
+      '    default_max: 6',
+    ].join('\n');
+    var result = yp.parseSimpleYaml(yaml);
+    assert.strictEqual(result.context_window.max_tokens, 200000);
+    assert.strictEqual(result.context_window.thresholds.small, 200);
+    assert.strictEqual(result.workflow.default.name, 'std');
+    assert.strictEqual(result.workflow.default.stages.length, 2);
+    assert.deepStrictEqual(result.workflow.default.stages[0].skills, ['task-creator', 'split-work-package']);
+    assert.strictEqual(result.workflow.default.stages[0].checkpoint, true);
+    assert.strictEqual(result.workflow.default.stages[1].id, 'implementation');
+    assert.strictEqual(result.agent_dispatcher.concurrency.default_max, 6);
   });
 });

@@ -125,15 +125,30 @@ function extractTitle(headerLine) {
 }
 
 /**
- * 提取 section 标题里的显式 WP 引用（如 `## WP-5: 数据模型`）。
+ * 提取 section 标题里的显式 WP 引用（如 `## WP-5: 数据模型` / `## WP-A: ...` /
+ * `## WP-feature-x: ...`）。
+ *
+ * WP-186（放宽）：正则从 `WP-?(\d+)` 放宽到 `WP-?([A-Za-z0-9][\w-]*)`，支持
+ * 字母 / 混合编号（WP-A、WP-175、WP-feature-x），与 loop-snapshot.parseProgressMarkdown
+ * 已放宽的 `WP-?[\w-]+` 口径对齐 —— 否则字母编号 section 经 assignWpIds 派生为数字，
+ * 真实链路（plan-reader→driver→PROGRESS.md）永不产字母编号。
+ *
+ * 边界设计：
+ *   - 必须以字母/数字开头（`[A-Za-z0-9]`），排除 `WP--` / `WP-` 空编号；
+ *   - 后续允许 `[\w-]*`（连字符、字母、数字、下划线），与 loop-snapshot 一致；
+ *   - 外层 `\b` 确保整体是单词边界，`[\w-]+` 含连字符但不会跨词贪婪（见测试）。
+ *
+ * 归一化：统一规整为 `WP-<原token>`（编号 token 保留原样，大小写不变 —— 与
+ * loop-snapshot 的 `'WP-' + m[1].replace(/^WP-?/i,'')` 一致）。
+ *
  * @param {string} headerLine
  * @returns {string|null}
  */
 function extractExplicitWpId(headerLine) {
   if (!headerLine) return null;
-  var m = String(headerLine).match(/\b(WP-?(\d+))\b/i);
+  var m = String(headerLine).match(/\bWP-?([A-Za-z0-9][\w-]*)\b/i);
   if (!m) return null;
-  return 'WP-' + m[2];
+  return 'WP-' + m[1];
 }
 
 /**
@@ -164,11 +179,14 @@ function isStepLine(line) {
  */
 function parseTaskItem(line) {
   if (!line) return null;
-  // 仅匹配任务项：[ ] 或 [xX✓✔✗] 等勾选标记
+  // 仅匹配任务项：[ ] 或 [xX✓✔✗×] 等勾选标记
   var m = String(line).match(/^\s*[-*+]\s*\[([ xX✓✔✗×])\]\s+(.+)$/);
   if (!m) return null;
   var mark = m[1].toLowerCase();
-  var checked = mark === 'x' || mark === '✓' || mark === '✔' || mark === '✗' || mark === '×';
+  // B7: ✗/× are "failed / not done" markers — they must NOT count as checked.
+  // Only x/X/✓/✔ (positive check marks) are checked. This was previously
+  // treating ✗ and × as checked:true, semantically inverting failures to done.
+  var checked = mark === 'x' || mark === '✓' || mark === '✔';
   return { checked: checked, text: m[2].trim() };
 }
 
@@ -177,7 +195,12 @@ function parseTaskItem(line) {
  * 识别语义：「依赖 WP-X」/「depends on WP-X」/「先完成 WP-X」/「after WP-X」/
  *           「需要 WP-X」/「requires WP-X」。
  * 仅返回当前已识别 wpId 集合内的引用（避免把无关的 WP-NNNN 文档号误当依赖）。
- * 若 knownIds 非空，做白名单过滤；为空则不过滤（全部 WP-\d+ 视为依赖引用）。
+ * 若 knownIds 非空，做白名单过滤；为空则不过滤（全部 WP 引用视为依赖）。
+ *
+ * WP-186（放宽）：捕获组从 `WP-?(\d+)` 放宽到 `WP-?([A-Za-z0-9][\w-]*)`，与
+ * extractExplicitWpId / loop-snapshot 口径一致，支持字母/混合编号依赖（如
+ * `依赖 WP-A`）。
+ *
  * @param {string} text
  * @param {string[]} [knownIds] 已分配的合法 wpId 白名单
  * @returns {string[]} 去重后的依赖 wpId 列表（首次出现顺序）
@@ -186,8 +209,8 @@ function extractDependencyRefs(text, knownIds) {
   if (!text) return [];
   var refs = [];
   var seen = {};
-  // 依赖语义锚词（中英），后跟 WP-NNN
-  var re = /(?:依赖|depends?\s*on|先完成|需要|requires?|after|前置)\s*:?\s*(WP-?(\d+))/gi;
+  // 依赖语义锚词（中英），后跟 WP-<字母/数字编号>
+  var re = /(?:依赖|depends?\s*on|先完成|需要|requires?|after|前置)\s*:?\s*(WP-?([A-Za-z0-9][\w-]*))/gi;
   var m;
   while ((m = re.exec(text)) !== null) {
     var wid = 'WP-' + m[2];

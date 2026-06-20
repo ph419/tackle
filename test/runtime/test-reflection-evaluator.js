@@ -256,6 +256,18 @@ test.describe('_failedCountFromChecklist (WP-176-5)', function () {
   test('total=0 且无 failed 字段 → null', function () {
     assert.strictEqual(evaluator._failedCountFromChecklist({ summary: { total: 0, passed: 0 } }), null);
   });
+
+  test('B19: passed > total 推导出负值 → 夹紧到 0', function () {
+    // Buggy/lying checklist: passed > total would yield negative failed count,
+    // corrupting computeRefineProgress. Floor at 0.
+    assert.strictEqual(evaluator._failedCountFromChecklist({ summary: { total: 3, passed: 5 } }), 0,
+      'negative derived failed count clamped to 0');
+  });
+
+  test('B19: summary.failed 为负/NaN → 夹紧到 0', function () {
+    assert.strictEqual(evaluator._failedCountFromChecklist({ summary: { failed: -2 } }), 0);
+    assert.strictEqual(evaluator._failedCountFromChecklist({ summary: { failed: NaN } }), 0);
+  });
 });
 
 test.describe('_prevFailedCountFromHistory (WP-176-5)', function () {
@@ -278,6 +290,54 @@ test.describe('_prevFailedCountFromHistory (WP-176-5)', function () {
 
   test('null state → null', function () {
     assert.strictEqual(evaluator._prevFailedCountFromHistory(null), null);
+  });
+});
+
+test.describe('_noProgressStreakFromHistory (WP-191-2-impl)', function () {
+  test('当前轮 noProgress=true + 无 history → streak=1', function () {
+    assert.strictEqual(evaluator._noProgressStreakFromHistory({}, true), 1);
+  });
+
+  test('当前轮 noProgress=false → streak=0（即使历史有 noProgress）', function () {
+    var state = { history: [
+      { iteration: 1, eval: { noProgress: true } },
+      { iteration: 2, eval: { noProgress: true } },
+    ] };
+    // 当前轮 false → 不累计；末轮 true 但当前轮断链
+    assert.strictEqual(evaluator._noProgressStreakFromHistory(state, false), 0);
+  });
+
+  test('连续 noProgress 历史 + 当前 true → 累计全部', function () {
+    var state = { history: [
+      { iteration: 1, eval: { noProgress: true } },
+      { iteration: 2, eval: { noProgress: true } },
+    ] };
+    assert.strictEqual(evaluator._noProgressStreakFromHistory(state, true), 3);
+  });
+
+  test('中间断链（非 true）→ 只数末尾连续段', function () {
+    var state = { history: [
+      { iteration: 1, eval: { noProgress: true } },
+      { iteration: 2, eval: { noProgress: false } }, // 断链
+      { iteration: 3, eval: { noProgress: true } },
+    ] };
+    // 当前 true + 末轮 true = 2（iteration 1 被断链隔离）
+    assert.strictEqual(evaluator._noProgressStreakFromHistory(state, true), 2);
+  });
+
+  test('旧 history 无 noProgress 字段 → 视为 false，不误判累计', function () {
+    var state = { history: [
+      { iteration: 1, eval: { proximity: 0.5 } },
+      { iteration: 2, eval: { proximity: 0.5 } },
+    ] };
+    assert.strictEqual(evaluator._noProgressStreakFromHistory(state, true), 1,
+      '仅当前轮计入，旧字段缺失不累计');
+    assert.strictEqual(evaluator._noProgressStreakFromHistory(state, false), 0);
+  });
+
+  test('null state → 仅看 curNoProgress', function () {
+    assert.strictEqual(evaluator._noProgressStreakFromHistory(null, true), 1);
+    assert.strictEqual(evaluator._noProgressStreakFromHistory(null, false), 0);
   });
 });
 
@@ -428,6 +488,68 @@ test.describe('score', function () {
     var out3 = await evaluator.score({}, 'loop-1', snapshot, state3);
     assert.strictEqual(out3.divergenceStreak, 3);
     assert.strictEqual(out3.diverged, true, 'streak=3 达阈值');
+  });
+
+  // ─────────────────────────────────────────────
+  // noProgress 协同发散（WP-191-2-impl）：proximity 不升 OR 无代码进展，
+  // 任一连续 N 轮 → diverged。保留 proximity 发散语义不破坏。
+  // ─────────────────────────────────────────────
+
+  test('noProgress=true 透传到 EvalResult', async function () {
+    var snapshot = { lastChecklist: { passed: false, noProgress: true, summary: { total: 4, passed: 2, failed: 2 } } };
+    var out = await evaluator.score({}, 'loop-1', snapshot, {});
+    assert.strictEqual(out.noProgress, true);
+    assert.strictEqual(out.noProgressStreak, 1, '首轮 + 当前 true → 1');
+  });
+
+  test('checklist 无 noProgress 字段 → curNoProgress=false（不误判）', async function () {
+    var snapshot = { lastChecklist: { passed: false, summary: { total: 4, passed: 2, failed: 2 } } };
+    var out = await evaluator.score({}, 'loop-1', snapshot, {});
+    assert.strictEqual(out.noProgress, false);
+    assert.strictEqual(out.noProgressStreak, 0);
+  });
+
+  test('连续 N 轮 noProgress（proximity 在升）→ 仍 diverged（协同熔断）', async function () {
+    // proximity 持续上升（0.4→0.5→0.6），proximityStreak=0（不发散）；
+    // 但每轮 noProgress=true（executor 报工作树干净），noProgressStreak 累计达阈值 → diverged
+    var state = {
+      history: [
+        { iteration: 1, eval: { proximity: 0.4, noProgress: true } },
+        { iteration: 2, eval: { proximity: 0.5, noProgress: true } },
+      ],
+    };
+    // 当前轮 proximity=0.6（在升，streak=0），但 noProgress=true
+    var snapshot = { lastChecklist: { passed: false, noProgress: true, summary: { total: 10, passed: 6, failed: 4 } } };
+    var out = await evaluator.score({}, 'loop-1', snapshot, state);
+    assert.strictEqual(out.divergenceStreak, 0, 'proximity 在升 → proximity 不发散');
+    assert.strictEqual(out.noProgressStreak, 3, '连续 3 轮无代码进展');
+    assert.strictEqual(out.diverged, true, 'noProgress 连续达阈值 → diverged（协同熔断生效）');
+  });
+
+  test('noProgress 未达阈值 → 不发散（proximity 也未达）', async function () {
+    var state = {
+      history: [
+        { iteration: 1, eval: { proximity: 0.5, noProgress: true } },
+      ],
+    };
+    // 当前轮 noProgress=true → streak=2（未达 3）；proximity 不变 streak 也累计
+    var snapshot = { lastChecklist: { passed: false, noProgress: true, summary: { total: 4, passed: 2, failed: 2 } } };
+    var out = await evaluator.score({}, 'loop-1', snapshot, state);
+    assert.strictEqual(out.noProgressStreak, 2);
+    assert.strictEqual(out.diverged, false, 'noProgress streak=2 未达阈值 3');
+  });
+
+  test('达成态不累计 noProgress（与 proximity streak 一致的宽容）', async function () {
+    var state = {
+      history: [
+        { iteration: 1, eval: { proximity: 1, noProgress: true } },
+        { iteration: 2, eval: { proximity: 1, noProgress: true } },
+      ],
+    };
+    var snapshot = { lastChecklist: { passed: true, noProgress: true, summary: { total: 4, passed: 4, failed: 0 } } };
+    var out = await evaluator.score({}, 'loop-1', snapshot, state);
+    assert.strictEqual(out.noProgressStreak, 0, '达成态 → noProgress 归零');
+    assert.strictEqual(out.diverged, false);
   });
 
   test('proximity 改进 → converged=true, trend=improving, streak 归零', async function () {

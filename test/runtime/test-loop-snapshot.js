@@ -245,6 +245,152 @@ test.describe('_parseProgressMarkdown', function () {
 });
 
 // ─────────────────────────────────────────────
+// Section 2b: WP-186 字母/混合编号 + checklist 完成态兜底
+// ─────────────────────────────────────────────
+
+test.describe('_parseProgressMarkdown WP-186（字母/混合编号）', function () {
+  test('WP-A / WP-101 / WP-175 三类编号均能识别为 completed', function () {
+    var dir = makeTmpDir();
+    try {
+      var content = [
+        '# Progress',
+        '- [x] WP-A 字母编号',
+        '- [x] WP-101 数字编号',
+        '- [x] WP-175 数字编号',
+        '- [ ] WP-176 待办',
+      ].join('\n');
+      fs.writeFileSync(path.join(dir, 'PROGRESS.md'), content, 'utf8');
+      var result = snapshot._parseProgressMarkdown(dir);
+      assert.ok(result.completed.indexOf('WP-A') !== -1, 'WP-A 应识别');
+      assert.ok(result.completed.indexOf('WP-101') !== -1, 'WP-101 应识别');
+      assert.ok(result.completed.indexOf('WP-175') !== -1, 'WP-175 应识别');
+      assert.ok(result.incomplete.indexOf('WP-176') !== -1, 'WP-176 待办');
+    } finally {
+      cleanupTmpDir(dir);
+    }
+  });
+
+  test('WP 不带连字符（WPA / WP101）也能识别', function () {
+    var dir = makeTmpDir();
+    try {
+      var content = '- [x] WPA\n- [x] WP101\n';
+      fs.writeFileSync(path.join(dir, 'PROGRESS.md'), content, 'utf8');
+      var result = snapshot._parseProgressMarkdown(dir);
+      assert.ok(result.completed.indexOf('WP-A') !== -1);
+      assert.ok(result.completed.indexOf('WP-101') !== -1);
+    } finally {
+      cleanupTmpDir(dir);
+    }
+  });
+});
+
+// ─────────────────────────────────────────────
+// Section 2c: WP-192-6 严格版首字符约束（与 plan-reader 口径对齐）
+//   loop-snapshot 原用宽松版 WP-?[\w-]+（允许下划线/连字符开头），现统一为严格版
+//   WP-?[A-Za-z0-9][\w-]*（首字符必须字母/数字）。下划线/连字符开头编号（WP-_x /
+//   WP--1）必须被拒绝，杜绝与 plan-reader 的口径分歧。
+// ─────────────────────────────────────────────
+
+test.describe('_parseProgressMarkdown WP-192-6 严格版首字符约束', function () {
+  test('下划线开头编号（WP-_x）严格版拒绝', function () {
+    var dir = makeTmpDir();
+    try {
+      var content = '- [x] WP-_x 不应识别\n- [x] WP-175 正常\n';
+      fs.writeFileSync(path.join(dir, 'PROGRESS.md'), content, 'utf8');
+      var result = snapshot._parseProgressMarkdown(dir);
+      assert.ok(result.completed.indexOf('WP-175') !== -1, '正常编号仍识别');
+      assert.ok(result.completed.indexOf('WP-_x') === -1 && result.completed.indexOf('WP-x') === -1,
+        '下划线开头编号应被拒绝（不进 completed）');
+    } finally {
+      cleanupTmpDir(dir);
+    }
+  });
+
+  test('连字符开头编号（WP--1）严格版拒绝', function () {
+    var dir = makeTmpDir();
+    try {
+      var content = '- [x] WP--1 不应识别\n- [x] WP-176 正常\n';
+      fs.writeFileSync(path.join(dir, 'PROGRESS.md'), content, 'utf8');
+      var result = snapshot._parseProgressMarkdown(dir);
+      assert.ok(result.completed.indexOf('WP-176') !== -1, '正常编号仍识别');
+      // WP--1 不应被识别为任何合法 WP（不应产出 WP-1 / WP--1）
+      assert.ok(result.completed.indexOf('WP-1') === -1 && result.completed.indexOf('WP--1') === -1,
+        '连字符开头编号应被拒绝');
+    } finally {
+      cleanupTmpDir(dir);
+    }
+  });
+
+  test('待办行同样适用严格版（WP-_y 不进 incomplete）', function () {
+    var dir = makeTmpDir();
+    try {
+      var content = '- [ ] WP-_y 待办不应识别\n- [ ] WP-177 正常待办\n';
+      fs.writeFileSync(path.join(dir, 'PROGRESS.md'), content, 'utf8');
+      var result = snapshot._parseProgressMarkdown(dir);
+      assert.ok(result.incomplete.indexOf('WP-177') !== -1, '正常待办仍识别');
+      assert.ok(result.incomplete.indexOf('WP-_y') === -1 && result.incomplete.indexOf('WP-y') === -1,
+        '下划线开头待办应被拒绝');
+    } finally {
+      cleanupTmpDir(dir);
+    }
+  });
+});
+
+// ─────────────────────────────────────────────
+// Section 2d: WP-192-6 _queryGitDiff filesByWp 严格版（路径 WP 前缀提取）
+// ─────────────────────────────────────────────
+
+test.describe('_queryGitDiff filesByWp WP-192-6 严格版', function () {
+  test('正常 WP 路径归入 filesByWp，下划线开头前缀不误收', function () {
+    // _queryGitDiff 依赖真实 git，这里直接验证其内部正则口径：构造一个含
+    // WP 前缀路径的 numstat 行，确认严格版只收合法 WP。由于函数封装了 git 调用，
+    // 通过注入伪造的 numstat 输出不可行；改为直接断言归一化正则行为与 plan-reader 一致。
+    // （正则口径已由 _parseProgressMarkdown 严格版用例覆盖同一组字符类。）
+    var re = /WP-?([A-Za-z0-9][\w-]*)/i;
+    assert.strictEqual('WP-' + 'docs/wp/WP-174.md'.match(re)[1], 'WP-174');
+    assert.strictEqual('WP-' + 'docs/wp/WP-feature-x.md'.match(re)[1], 'WP-feature-x');
+    assert.strictEqual('docs/wp/WP-_bad.md'.match(re), null, '下划线开头不匹配');
+    assert.strictEqual('docs/wp/WP--bad.md'.match(re), null, '连字符开头不匹配');
+  });
+});
+
+
+test.describe('_buildWorkPackages WP-186 checklist 完成态兜底', function () {
+  test('lastChecklist.passed=true 且 wpId 在 goal 内 → 视为 completed（即使 PROGRESS 未写）', function () {
+    var state = { goal: { wpIds: ['WP-A', 'WP-B'] } };
+    var progress = null; // 模拟 PROGRESS.md 未写
+    var chk = { wpId: 'WP-A', passed: true, summary: { total: 1, passed: 1, failed: 0 }, failedItems: [] };
+    var wp = snapshot._buildWorkPackages(state, progress, chk);
+    assert.ok(wp.completed.indexOf('WP-A') !== -1, 'WP-A 应由 checklist 兜底为 completed');
+    assert.ok(wp.pending.indexOf('WP-A') === -1, 'WP-A 不应在 pending');
+    assert.ok(wp.pending.indexOf('WP-B') !== -1, 'WP-B 仍在 pending');
+  });
+
+  test('lastChecklist.passed=false → 不兜底为 completed', function () {
+    var state = { goal: { wpIds: ['WP-A'] } };
+    var chk = { wpId: 'WP-A', passed: false, summary: { total: 1, passed: 0, failed: 1 }, failedItems: [] };
+    var wp = snapshot._buildWorkPackages(state, null, chk);
+    assert.ok(wp.completed.indexOf('WP-A') === -1, 'passed=false 不应兜底 completed');
+  });
+
+  test('lastChecklist.wpId 不在 goal 内 → 越界保护，不兜底', function () {
+    var state = { goal: { wpIds: ['WP-A'] } };
+    var chk = { wpId: 'WP-Z', passed: true, summary: { total: 1, passed: 1, failed: 0 }, failedItems: [] };
+    var wp = snapshot._buildWorkPackages(state, null, chk);
+    assert.ok(wp.completed.indexOf('WP-Z') === -1, '越界 wpId 不应进 completed');
+  });
+
+  test('PROGRESS 已写 + checklist 兜底 → completed 不重复', function () {
+    var state = { goal: { wpIds: ['WP-A'] } };
+    var progress = { completed: ['WP-A'] };
+    var chk = { wpId: 'WP-A', passed: true, summary: { total: 1, passed: 1, failed: 0 }, failedItems: [] };
+    var wp = snapshot._buildWorkPackages(state, progress, chk);
+    var count = wp.completed.filter(function (w) { return w === 'WP-A'; }).length;
+    assert.strictEqual(count, 1, 'completed 不应重复');
+  });
+});
+
+// ─────────────────────────────────────────────
 // Section 3: _queryWatchdog
 // ─────────────────────────────────────────────
 

@@ -30,102 +30,17 @@ var path = require('path');
 var CONFIG_SCHEMA = require('../contracts/config-schema.json');
 
 /**
- * Minimal YAML-like parser.
- * This is a simplified parser for the subset of YAML used in harness-config.yaml.
- * Supports nested objects and arrays.
+ * Minimal YAML-like parser — S8/A3 consolidated.
+ *
+ * Delegates to the shared `yaml-parser.parseSimpleYaml`. Previously this
+ * module had its own divergent copy; the shared parser now covers the same
+ * surface (flat keys, nested objects, lists, list-of-objects, inline flow
+ * arrays, quoted strings, comments) plus MAX_YAML_SIZE / MAX_DEPTH guards.
+ * @internal
  */
 function parseSimpleYaml(content) {
-  var result = {};
-  var lines = content.split('\n');
-  var stack = [{ obj: result, indent: -1, mode: 'object', key: null }];
-
-  for (var i = 0; i < lines.length; i++) {
-    var line = lines[i];
-
-    // Skip empty lines and comments
-    if (!line.trim() || line.trim().indexOf('#') === 0 || line.trim() === '---') {
-      continue;
-    }
-
-    var indent = line.search(/\S/);
-    if (indent < 0) continue;
-
-    // Find the right parent level
-    while (stack.length > 1 && stack[stack.length - 1].indent >= indent) {
-      stack.pop();
-    }
-
-    var current = stack[stack.length - 1];
-    var parent = current.obj;
-    var trimmed = line.trim();
-
-    // Array handling
-    if (trimmed.indexOf('- ') === 0) {
-      var itemContent = trimmed.substring(2).trim();
-      var colonIdx = itemContent.indexOf(':');
-
-      if (colonIdx === -1) {
-        // Simple array item
-        if (Array.isArray(parent)) {
-          parent.push(parseValue(itemContent));
-        }
-      } else {
-        // Object item in array
-        var itemKey = itemContent.substring(0, colonIdx).trim();
-        var itemValue = itemContent.substring(colonIdx + 1).trim();
-
-        if (Array.isArray(parent)) {
-          var newObj = {};
-          parent.push(newObj);
-          newObj[itemKey] = itemValue === '' ? {} : parseValue(itemValue);
-          stack.push({ obj: newObj, indent: indent, mode: 'object', key: null });
-        }
-      }
-      continue;
-    }
-
-    // Object key-value handling
-    var colonIdx = trimmed.indexOf(':');
-    if (colonIdx === -1) continue;
-
-    var key = trimmed.substring(0, colonIdx).trim();
-    var valuePart = trimmed.substring(colonIdx + 1).trim();
-
-    if (valuePart === '') {
-      // This starts a nested object/array
-      // Look ahead to see if the next non-comment line is an array
-      var isArrayOfObjects = false;
-      for (var j = i + 1; j < lines.length; j++) {
-        var nextLine = lines[j];
-        if (!nextLine.trim() || nextLine.trim().indexOf('#') === 0) {
-          continue; // Skip empty lines and comments
-        }
-        var nextIndent = nextLine.search(/\S/);
-        var nextTrimmed = nextLine.trim();
-        if (nextTrimmed.indexOf('- ') === 0 && nextIndent > indent) {
-          isArrayOfObjects = true;
-        }
-        break; // Found first non-comment line, stop looking
-      }
-
-      if (isArrayOfObjects) {
-        // Create an array
-        var arr = [];
-        parent[key] = arr;
-        stack.push({ obj: arr, indent: indent, mode: 'array', key: key });
-      } else {
-        // Create an object
-        var newObj = {};
-        parent[key] = newObj;
-        stack.push({ obj: newObj, indent: indent, mode: 'object', key: key });
-      }
-    } else {
-      // Simple value
-      parent[key] = parseValue(valuePart);
-    }
-  }
-
-  return result;
+  var sharedParser = require('./yaml-parser');
+  return sharedParser.parseSimpleYaml(content);
 }
 
 /**

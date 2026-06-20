@@ -7,7 +7,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { StateStore, MemoryAdapter } = require('../../plugins/runtime/state-store');
+const { StateStore, MemoryAdapter, FileSystemAdapter } = require('../../plugins/runtime/state-store');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -436,5 +436,145 @@ test.describe('StateStore - Edge Cases', () => {
     keys.sort();
 
     assert.deepStrictEqual(keys, ['a.b', 'a.c.d'], 'only leaf values included');
+  });
+
+  // S7 回归：prototype 污染防护（__proto__ / constructor / prototype 段被拒绝）
+  test('S7: set("__proto__.*") 不污染 Object.prototype', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'state-store-s7-'));
+    const store = new StateStore({ filePath: path.join(tmpDir, 'state.json') });
+    try {
+      const before = Object.prototype.polluted;
+      await store.set('__proto__.polluted', true);
+      assert.strictEqual(Object.prototype.polluted, before, 'Object.prototype 不应被污染');
+      // constructor / prototype 同理
+      await store.set('constructor.prototype.evil', 1);
+      assert.strictEqual(({}).evil, undefined, 'constructor.prototype 不应被污染');
+    } finally {
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_e) {}
+    }
+  });
+
+  test('S7: _setNested 直接调用也防护', () => {
+    const dummy = {};
+    const store = new StateStore({ filePath: path.join(os.tmpdir(), 'nonexistent-s7-' + process.pid + '.json') });
+    store._setNested(dummy, '__proto__.x', 42);
+    assert.strictEqual(Object.prototype.x, undefined);
+    assert.strictEqual(dummy.x, undefined);
+  });
+});
+
+// A1 回归：state-store 回退分桶 + Windows rename EPERM 降级 + 旧版迁移
+test.describe('StateStore - A1 fallback bucketing + Windows EPERM + legacy migration', () => {
+  test('A1: should migrate a legacy flat .claude-state file aside when sharding by loopId', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'state-a1-migrate-'));
+    try {
+      // Pre-create a flat file where we want a directory (legacy pre-A1 layout)
+      const flatPath = path.join(dir, '.claude-state');
+      fs.writeFileSync(flatPath, JSON.stringify({ old: true }), 'utf8');
+
+      // Sharded path under the flat file's location
+      const store = new StateStore({
+        filePath: path.join(dir, '.claude-state', 'L1', 'state.json'),
+      });
+      await store.set('loop.L1', { x: 1 });
+
+      // The flat file should have been moved aside, not destroyed
+      const entries = fs.readdirSync(dir);
+      const legacy = entries.find(e => e.indexOf('.legacy-flat.') !== -1);
+      assert.ok(legacy, 'legacy flat file migrated aside');
+      const legacyData = JSON.parse(fs.readFileSync(path.join(dir, legacy), 'utf8'));
+      assert.strictEqual(legacyData.old, true, 'legacy data preserved');
+
+      // New data should be readable
+      const v = await store.get('loop.L1');
+      assert.deepStrictEqual(v, { x: 1 }, 'new sharded data readable');
+    } finally {
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_e) {}
+    }
+  });
+
+  test('A1: should write to a sharded per-loopId directory under .claude-state', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'state-a1-shard-'));
+    try {
+      const store = new StateStore({
+        filePath: path.join(dir, '.claude-state', 'L42', 'state.json'),
+      });
+      await store.set('loop.L42', { ok: true });
+      assert.ok(fs.existsSync(path.join(dir, '.claude-state', 'L42', 'state.json')),
+        'sharded state file created');
+      const v = await store.get('loop.L42');
+      assert.deepStrictEqual(v, { ok: true });
+    } finally {
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_e) {}
+    }
+  });
+
+  test('A1: _isWindowsRenameRetryable classifies EPERM/EACCES/EBUSY only', () => {
+    const adapter = new FileSystemAdapter(path.join(os.tmpdir(), 'fake-state.json'));
+    assert.strictEqual(adapter._isWindowsRenameRetryable({ code: 'EPERM' }), true);
+    assert.strictEqual(adapter._isWindowsRenameRetryable({ code: 'EACCES' }), true);
+    assert.strictEqual(adapter._isWindowsRenameRetryable({ code: 'EBUSY' }), true);
+    // Non-retryable errors must NOT trigger the fallback
+    assert.strictEqual(adapter._isWindowsRenameRetryable({ code: 'ENOSPC' }), false);
+    assert.strictEqual(adapter._isWindowsRenameRetryable({ code: 'ENOENT' }), false);
+    assert.strictEqual(adapter._isWindowsRenameRetryable({ code: 'EROFS' }), false);
+    assert.strictEqual(adapter._isWindowsRenameRetryable({ code: undefined }), false);
+    assert.strictEqual(adapter._isWindowsRenameRetryable(null), false);
+  });
+
+  test('A1: write() should fall back to direct write when rename throws EPERM', async () => {
+    // Inject a fake adapter-like surface by monkey-patching the FileSystemAdapter
+    // path: create a real FileSystemAdapter and stub renameSync to throw EPERM
+    // once, then verify the data still lands on disk via direct write.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'state-a1-eperm-'));
+    try {
+      const filePath = path.join(dir, 'state.json');
+      const store = new StateStore({ filePath: filePath });
+      // Replace the adapter's renameSync with one that throws EPERM
+      const adapter = store._adapter;
+      const realRename = fs.renameSync;
+      adapter._realRename = realRename;
+      fs.renameSync = function (_src, _dst) {
+        const err = new Error('EPERM');
+        err.code = 'EPERM';
+        throw err;
+      };
+      try {
+        await store.set('k', 'v');
+        // Despite rename failing, the target file should contain the data
+        const onDisk = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+        assert.strictEqual(onDisk.k, 'v', 'direct-write fallback persisted data');
+      } finally {
+        fs.renameSync = realRename;
+      }
+    } finally {
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_e) {}
+    }
+  });
+
+  test('A1: write() should still surface non-retryable rename errors', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'state-a1-hard-'));
+    try {
+      const filePath = path.join(dir, 'state.json');
+      const store = new StateStore({ filePath: filePath });
+      const adapter = store._adapter;
+      const realRename = fs.renameSync;
+      fs.renameSync = function (_src, _dst) {
+        const err = new Error('ENOSPC');
+        err.code = 'ENOSPC';
+        throw err;
+      };
+      try {
+        await assert.rejects(
+          () => store.set('k', 'v'),
+          (err) => err.code === 'ENOSPC',
+          'non-retryable rename error surfaces'
+        );
+      } finally {
+        fs.renameSync = realRename;
+      }
+    } finally {
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_e) {}
+    }
   });
 });

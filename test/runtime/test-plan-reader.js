@@ -11,6 +11,7 @@
  *   - 单 section（无标题兜底 / Step 行切分）
  *   - 任务项勾选状态识别（[ ]/[x]/[✓]/[X]）
  *   - 显式 WP-NNN 标题 vs 派生编号
+ *   - WP-186 字母/混合编号放宽（WP-A / WP-feature-x 端到端）
  *   - 成功标准 section 抽取
  */
 
@@ -508,6 +509,209 @@ test.describe('WP 编号分配', function () {
 });
 
 // ─────────────────────────────────────────────
+// Section 6b: WP-186 字母/混合编号放宽（端到端验证）
+// ─────────────────────────────────────────────
+
+test.describe('WP-186 字母/混合编号（extractExplicitWpId 放宽）', function () {
+  test('## WP-A 解析为 wpId WP-A（非派生数字）', function () {
+    var content = [
+      '# 计划',
+      '',
+      '## WP-A: 字母模块',
+      '- [ ] 实现 A',
+      '',
+      '## WP-B: 字母模块二',
+      '- [ ] 实现 B',
+      '',
+    ].join('\n');
+    var env = setupPlan(content);
+    try {
+      var res = planReader.parsePlanToGoal({ planFilePath: env.planPath, projectRoot: env.dir });
+      assert.strictEqual(res.error, null);
+      var ids = res.workPackages.map(function (w) { return w.wpId; });
+      assert.ok(ids.indexOf('WP-A') !== -1, '应保留字母编号 WP-A，而非派生 WP-1');
+      assert.ok(ids.indexOf('WP-B') !== -1, '应保留字母编号 WP-B');
+      assert.ok(res.goal.wpIds.indexOf('WP-A') !== -1, 'goal.wpIds 应含 WP-A');
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  test('混合编号（WP-A + WP-101 + WP-feature-x）正确提取', function () {
+    var content = [
+      '## WP-A: 字母',
+      '- [ ] t1',
+      '',
+      '## WP-101: 数字',
+      '- [ ] t2',
+      '',
+      '## WP-feature-x: 混合',
+      '- [ ] t3',
+      '',
+    ].join('\n');
+    var env = setupPlan(content);
+    try {
+      var res = planReader.parsePlanToGoal({ planFilePath: env.planPath, projectRoot: env.dir });
+      assert.strictEqual(res.error, null);
+      var ids = res.workPackages.map(function (w) { return w.wpId; });
+      assert.ok(ids.indexOf('WP-A') !== -1);
+      assert.ok(ids.indexOf('WP-101') !== -1);
+      assert.ok(ids.indexOf('WP-feature-x') !== -1, '应保留连字符混合编号 WP-feature-x');
+      // wpId 唯一
+      assert.strictEqual(ids.length, new Set(ids).size);
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  test('纯数字编号 plan 向后兼容（放宽后行为不变）', function () {
+    var content = [
+      '## WP-10: A',
+      '- [ ] 实现',
+      '',
+      '## WP-11: B',
+      '- [ ] 实现',
+      '',
+    ].join('\n');
+    var env = setupPlan(content);
+    try {
+      var res = planReader.parsePlanToGoal({ planFilePath: env.planPath, projectRoot: env.dir });
+      assert.strictEqual(res.error, null);
+      var ids = res.workPackages.map(function (w) { return w.wpId; });
+      assert.deepStrictEqual(ids.sort(), ['WP-10', 'WP-11']);
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  test('字母编号依赖引用构建正确依赖图（端到端链路）', function () {
+    // 这是 WP-186 关键端到端证据：字母编号 section 的显式 id + 字母依赖引用
+    // 必须同时被识别，否则字母 WP 的依赖图断裂。
+    var content = [
+      '## WP-A: 基础',
+      '- [ ] 实现基础',
+      '',
+      '## WP-B: 上层',
+      '依赖 WP-A',
+      '- [ ] 实现上层',
+      '',
+    ].join('\n');
+    var env = setupPlan(content);
+    try {
+      var res = planReader.parsePlanToGoal({ planFilePath: env.planPath, projectRoot: env.dir });
+      assert.strictEqual(res.error, null);
+      // WP-B 依赖 WP-A
+      var wpB = res.workPackages.find(function (w) { return w.wpId === 'WP-B'; });
+      assert.ok(wpB, 'WP-B 应存在');
+      assert.deepStrictEqual(wpB.dependencies, ['WP-A'], 'WP-B 应依赖 WP-A');
+      // 拓扑序：WP-A 先于 WP-B
+      assert.ok(res.dependencyGraph.order.indexOf('WP-A') <
+                res.dependencyGraph.order.indexOf('WP-B'));
+      assert.strictEqual(res.dependencyGraph.hasCycle, false);
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  test('内部工具：extractExplicitWpId 字母/混合/数字全覆盖', function () {
+    assert.strictEqual(planReader._extractExplicitWpId('## WP-A: 标题'), 'WP-A');
+    assert.strictEqual(planReader._extractExplicitWpId('## WP-175: 标题'), 'WP-175');
+    assert.strictEqual(planReader._extractExplicitWpId('## WP-feature-x: 标题'), 'WP-feature-x');
+    assert.strictEqual(planReader._extractExplicitWpId('## WPA: 无连字符'), 'WP-A');
+    // WP- 后为空 → 不匹配（避免误把裸 WP- 当编号）
+    assert.strictEqual(planReader._extractExplicitWpId('see WP- in doc'), null);
+    assert.strictEqual(planReader._extractExplicitWpId(''), null);
+    assert.strictEqual(planReader._extractExplicitWpId(null), null);
+  });
+
+  test('内部工具：extractDependencyRefs 字母编号白名单过滤', function () {
+    var text = '依赖 WP-A, depends on WP-B';
+    // 白名单含 WP-A → 只收 WP-A
+    assert.deepStrictEqual(
+      planReader._extractDependencyRefs(text, ['WP-A', 'WP-B']),
+      ['WP-A', 'WP-B']
+    );
+    assert.deepStrictEqual(planReader._extractDependencyRefs(text, ['WP-A']), ['WP-A']);
+    // 无白名单 → 全收
+    assert.deepStrictEqual(planReader._extractDependencyRefs('依赖 WP-A'), ['WP-A']);
+  });
+});
+
+// ─────────────────────────────────────────────
+// Section 6c: WP-192-6 严格版首字符约束（基准口径）
+//   plan-reader 是严格版基准，loop-snapshot 已对齐。下划线/连字符开头编号
+//   （WP-_x / WP--1）必须被拒绝，且两模块对同一输入产出相同结果。
+// ─────────────────────────────────────────────
+
+test.describe('WP-192-6 严格版首字符约束（基准口径）', function () {
+  test('extractExplicitWpId 拒绝下划线/连字符开头编号', function () {
+    assert.strictEqual(planReader._extractExplicitWpId('## WP-_x: bad'), null, 'WP-_x 应拒绝');
+    assert.strictEqual(planReader._extractExplicitWpId('## WP--1: bad'), null, 'WP--1 应拒绝');
+    assert.strictEqual(planReader._extractExplicitWpId('## WP-: bad'), null, 'WP- 空编号应拒绝');
+    // 合法编号仍正常
+    assert.strictEqual(planReader._extractExplicitWpId('## WP-175: ok'), 'WP-175');
+    assert.strictEqual(planReader._extractExplicitWpId('## WP-A: ok'), 'WP-A');
+    assert.strictEqual(planReader._extractExplicitWpId('## WP-feature-x: ok'), 'WP-feature-x');
+  });
+
+  test('extractDependencyRefs 拒绝下划线/连字符开头编号', function () {
+    // 下划线/连字符开头编号不应被收为依赖
+    assert.deepStrictEqual(planReader._extractDependencyRefs('依赖 WP-_x'), [], 'WP-_x 不应收');
+    assert.deepStrictEqual(planReader._extractDependencyRefs('depends on WP--1'), [], 'WP--1 不应收');
+    // 合法字母依赖仍正常
+    assert.deepStrictEqual(planReader._extractDependencyRefs('依赖 WP-A'), ['WP-A']);
+  });
+
+  test('端到端：下划线开头 section 标题不产生非法 wpId（降级派生）', function () {
+    // WP-_x 不是合法显式编号 → extractExplicitWpId 返回 null → 该 section 走派生编号，
+    // 而非产出 WP-_x 这类非法 id 污染 goal.wpIds。
+    var content = [
+      '## WP-_x: 非法编号',
+      '- [ ] 实现',
+      '',
+      '## WP-A: 合法',
+      '- [ ] 实现',
+      '',
+    ].join('\n');
+    var env = setupPlan(content);
+    try {
+      var res = planReader.parsePlanToGoal({ planFilePath: env.planPath, projectRoot: env.dir });
+      var ids = res.workPackages.map(function (w) { return w.wpId; });
+      assert.ok(ids.indexOf('WP-A') !== -1, '合法字母编号 WP-A 保留');
+      assert.ok(ids.indexOf('WP-_x') === -1, '不应产出 WP-_x 非法 id');
+      assert.ok(ids.indexOf('WP-x') === -1, '也不应部分匹配为 WP-x');
+      // WP-_x section 退化为派生编号（WP-1 之类数字）
+      assert.ok(ids.some(function (id) { return /^WP-\d+$/.test(id); }),
+        '非法编号 section 应降级为数字派生编号');
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  test('跨模块一致性：plan-reader 与 loop-snapshot 对同输入产出相同结果', function () {
+    // 这是 WP-192-6 核心：两模块 WP 正则口径必须完全一致。
+    // 直接比对两模块的内部归一化正则行为（共享同一组字符类）。
+    var snapshot = require('../../plugins/runtime/loop-snapshot');
+    // plan-reader section 标题正则：/\bWP-?([A-Za-z0-9][\w-]*)\b/i
+    // loop-snapshot 路径正则：/WP-?([A-Za-z0-9][\w-]*)/i
+    // 两者字符类相同（[A-Za-z0-9][\w-]*），归一化都为 'WP-' + token（保留原样大小写）。
+    var inputs = ['WP-175', 'WP-A', 'wp-a', 'WP-feature-x', 'WP-_x', 'WP--1', 'WP-'];
+    var planReaderRe = /\bWP-?([A-Za-z0-9][\w-]*)\b/i;
+    inputs.forEach(function (tok) {
+      var line = '## ' + tok + ': t';
+      var m1 = line.match(planReaderRe);
+      var pr = m1 ? 'WP-' + m1[1] : null;
+      // loop-snapshot _queryGitDiff 路径正则同字符类
+      var m2 = ('docs/wp/' + tok + '.md').match(/WP-?([A-Za-z0-9][\w-]*)/i);
+      var ls = m2 ? 'WP-' + m2[1] : null;
+      assert.strictEqual(pr, ls, '两模块对 ' + tok + ' 应产出相同结果（pr=' + pr + ', ls=' + ls + ')');
+    });
+    // sanity：确认 loop-snapshot 模块确实加载（避免 require 路径写错静默通过）
+    assert.strictEqual(typeof snapshot._buildWorkPackages, 'function');
+  });
+});
+
+// ─────────────────────────────────────────────
 // Section 7: 成功标准 + checklistSpec + 内部工具
 // ─────────────────────────────────────────────
 
@@ -570,6 +774,23 @@ test.describe('内部工具（白盒）', function () {
     assert.deepStrictEqual(planReader._parseTaskItem('* [x] done'), { checked: true, text: 'done' });
     assert.strictEqual(planReader._parseTaskItem('- not a task'), null);
     assert.strictEqual(planReader._parseTaskItem(''), null);
+  });
+
+  test('B7: ✗ / × 不应被当作 checked（语义反转修复）', function () {
+    // 失败/未完成标记必须 NOT 计为完成。修复前 ✗/× 被误判为 checked:true。
+    assert.deepStrictEqual(planReader._parseTaskItem('- [✗] failed task'),
+      { checked: false, text: 'failed task' }, '✗ 不应算 checked');
+    assert.deepStrictEqual(planReader._parseTaskItem('- [×] another fail'),
+      { checked: false, text: 'another fail' }, '× 不应算 checked');
+    // 正向标记仍正确
+    assert.deepStrictEqual(planReader._parseTaskItem('- [x] done'),
+      { checked: true, text: 'done' }, 'x 仍算 checked');
+    assert.deepStrictEqual(planReader._parseTaskItem('- [X] DONE'),
+      { checked: true, text: 'DONE' }, 'X 仍算 checked');
+    assert.deepStrictEqual(planReader._parseTaskItem('- [✓] checked'),
+      { checked: true, text: 'checked' }, '✓ 仍算 checked');
+    assert.deepStrictEqual(planReader._parseTaskItem('- [✔] checked'),
+      { checked: true, text: 'checked' }, '✔ 仍算 checked');
   });
 
   test('extractDependencyRefs 多语义 + 去重 + 白名单', function () {

@@ -17,6 +17,8 @@
 
 var fs = require('fs');
 var path = require('path');
+var safePath = require('./safe-path');
+var isWithin = safePath.isWithin;
 
 var VALID_SOURCE_TYPES = ['core', 'npm', 'local'];
 
@@ -44,15 +46,26 @@ function isAbsolutePath(p) {
  *
  * Resolution strategy by sourceType:
  *   - 'core' (default):
- *       1. If source is absolute → use directly
+ *       1. If source is absolute → use directly (must be a real directory)
  *       2. If source has path separators → resolve relative to registryDir
+ *          (S3: must remain inside the repo root, i.e. registryDir's parent;
+ *          `..` escapes that climb past the repo root are rejected)
  *       3. Otherwise → join defaultPluginsDir with source
  *   - 'npm':
  *       Resolve via require.resolve(packageName) and extract the directory.
  *       The source field is interpreted as an npm package name (with optional
  *       sub-path, e.g. 'tackle-plugin-foo/sub/path').
  *   - 'local':
- *       Absolute or relative path. Relative paths resolve against registryDir.
+ *       Absolute or relative path. Relative paths resolve against registryDir
+ *       (S3: must remain inside the repo root).
+ *
+ * S3 SECURITY NOTE (path traversal):
+ *   Relative sources may legitimately climb one level to a sibling directory
+ *   inside the repository (e.g. '../custom-plugins/my-plugin'), but they may
+ *   NOT escape the repository root entirely (e.g. '../../etc/passwd'). The
+ *   repo root is taken to be the parent of registryDir. Absolute sources are
+ *   allowed for trusted local/third-party installs and are NOT containment-
+ *   checked (a user who points at an absolute path is opting into that path).
  *
  * @public
  * @param {object}  entry              - Plugin registry entry
@@ -62,7 +75,8 @@ function isAbsolutePath(p) {
  * @param {string}  defaultPluginsDir  - Base directory for core plugins (e.g. .../plugins/core)
  * @param {string}  registryDir        - Directory containing plugin-registry.json
  * @returns {string} resolved absolute path to the plugin directory
- * @throws {Error} if sourceType is invalid or npm package cannot be resolved
+ * @throws {Error} if sourceType is invalid, npm package cannot be resolved,
+ *                 or a relative source escapes the repository root (S3)
  */
 function resolvePluginPath(entry, defaultPluginsDir, registryDir) {
   var source = entry.source || entry.name;
@@ -85,16 +99,22 @@ function resolvePluginPath(entry, defaultPluginsDir, registryDir) {
     return resolveNpmPath(source, entry.name);
   }
 
+  // The repository root is the parent of registryDir (plugins/ → repo root).
+  // Relative sources must remain within this root.
+  var repoRoot = path.resolve(registryDir, '..');
+
   // local source: absolute or relative path
   if (sourceType === 'local') {
     if (isAbsolutePath(source)) {
-      return source;
+      return source; // opt-in absolute path, trusted
     }
-    return path.resolve(registryDir, source);
+    var localResolved = path.resolve(registryDir, source);
+    assertWithinRepo(localResolved, repoRoot, entry.name);
+    return localResolved;
   }
 
   // core (default): existing behavior
-  // Absolute path → use directly
+  // Absolute path → use directly (opt-in absolute path, trusted)
   if (isAbsolutePath(source)) {
     return source;
   }
@@ -102,11 +122,37 @@ function resolvePluginPath(entry, defaultPluginsDir, registryDir) {
   // Relative path containing path separators → resolve relative to registry directory
   // (e.g. '../custom-plugins/my-plugin' or './my-plugin')
   if (source.indexOf('/') !== -1 || source.indexOf('\\') !== -1) {
-    return path.resolve(registryDir, source);
+    var resolved = path.resolve(registryDir, source);
+    assertWithinRepo(resolved, repoRoot, entry.name);
+    return resolved;
   }
 
-  // Default: core plugin → join with defaultPluginsDir
+  // Default: core plugin → join with defaultPluginsDir (a bare name, no traversal risk)
   return path.join(defaultPluginsDir, source);
+}
+
+/**
+ * Reject a resolved path that escapes the repository root.
+ * Allows the path to equal the repo root or live anywhere beneath it, but
+ * not its ancestors/siblings outside the repo.
+ *
+ * @internal
+ * @param {string} resolved  - absolute resolved plugin path
+ * @param {string} repoRoot  - absolute repository root (parent of registryDir)
+ * @param {string} [pluginName] - for error messages
+ * @throws {Error} if resolved is not within repoRoot
+ */
+function assertWithinRepo(resolved, repoRoot, pluginName) {
+  var rel = path.relative(path.resolve(repoRoot), path.resolve(resolved));
+  // rel === '' means the path IS the repo root (allowed).
+  // rel starts with '..' means it escaped the repo root (reject).
+  if (rel !== '' && (rel === '..' || rel.indexOf('..' + path.sep) === 0 ||
+      rel.indexOf('../') === 0 || rel.indexOf('..\\') === 0)) {
+    throw new Error(
+      'Plugin "' + (pluginName || 'unknown') + '" source path escapes the repository root: ' +
+      resolved + ' (root: ' + repoRoot + '). Refusing to resolve path-traversal source.'
+    );
+  }
 }
 
 /**
