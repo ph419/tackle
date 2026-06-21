@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.8] - 2026-06-21
+
+### Changed
+
+- **游离测试文件迁移纳入 CI**：将两份从未被 `scripts/test-runner.js` 扫描（该 runner 仅递归扫 `test/`，根目录与 `tests/` 均被忽略）的测试归位至 `test/runtime/`，使其自动纳入 `npm test`：
+  - `test-validator-pipeline.js`（根目录）→ 已由 `test/runtime/test-validator-pipeline.js` 覆盖（40 测，commit `6feceaa` 引入），删除根目录死代码副本
+  - `tests/wp-035-concurrency-test.js`（`tests/` 目录，注意有 s）→ `test/runtime/test-wp035-concurrency.js`，逻辑函数（`is_time_in_range` / `get_max_concurrent`）与断言语义完全保留，仅把 ES2015+（`const`/`for...of`/箭头函数）改写为 ES5（`var`/`for`/普通函数）与项目其他测试风格统一、Win/cmd 兼容性更好；8 测全通过
+- **SECURITY.md 修正**：安全公告 URL 占位符 `github.com/user/tackle` → 实际仓库 `github.com/ph419/tackle`（与 `package.json` 的 `repository.url` 一致）；支持版本矩阵 `0.2.x` / `< 0.2` → `0.3.x` / `< 0.3`（当前版本 `0.3.8`）
+
+### Verified
+
+- npm test 全量通过（1639/0），其中 `test/runtime/test-wp035-concurrency.js` 8 测、`test/runtime/test-validator-pipeline.js` 40 测均零回归
+
 ## [0.3.7] - 2026-06-21
 
 ### Fixed
