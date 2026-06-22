@@ -247,24 +247,24 @@ test/unit/test_xxx.gd   # 新增
 ```markdown
 ## 🧹 清理状态
 
-- TeamDelete: ✅ 已执行 / ❌ 未执行
-- 团队名称: {team_name}
+- Teamee 逻辑销毁: ✅ 已完成（teamee_map 已空） / ❌ 未完成
+- 批次标签 (team_name): {team_name}
 - 清理时间: {cleanup_time}
 ```
 
-**如果 TeamDelete 未执行**，报告必须包含警告：
+**如果 Teamee 未全部逻辑销毁**，报告必须包含警告：
 
 ```markdown
-⚠️ **警告**: TeamDelete 未执行，存在资源泄漏风险！
-建议手动执行清理命令："清理团队"
+⚠️ **警告**: Teamee 未全部逻辑销毁（teamee_map 非空），存在资源残留！
+建议补执行 markTeameeDestroyed 清空映射表（当前 session implicit team 随 session 自动清理，无需 TeamDelete）
 ```
 
 ### 清理验证方法
 
 ```bash
-# 验证团队目录已删除
-ls ~/.claude/teams/{team_name}/ 2>/dev/null
-# 应该返回 "No such file or directory"
+# 验证 Teamee 已逻辑销毁（teamee_map 已空）
+# 注：当前 session implicit team 随 session 自动清理，不依赖目录删除
+# 历史残留的显式/UUID 团队目录可用 team-cleanup CLI 清理
 ```
 
 | 验证结果 | 处理 |

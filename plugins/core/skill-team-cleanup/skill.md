@@ -1,6 +1,6 @@
 # Team Cleanup
 
-手动清理残留的 Agent Teams 资源的工具。
+手动清理残留团队目录（历史显式命名/UUID 团队）的工具。当前 session 的 implicit team 随 session 自动清理，本工具主要用于清理旧 harness 时期遗留的团队目录。
 
 ## When to Use
 

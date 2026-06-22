@@ -246,7 +246,7 @@ AI 执行:
 3. **检查必须通过** - P3 阶段 checklist 不通过不能进入 P4
 4. **汇报必须询问** - P4 阶段必须询问下一步安排
 5. **状态必须记录** - 每个阶段完成后更新 task.md
-6. **🔴 清理必须执行** - 如果使用了 agent-dispatcher，P2→P3 转换时必须验证 TeamDelete
+6. **🔴 清理必须执行** - 如果使用了 agent-dispatcher，P2→P3 转换时必须验证 Teamee 已逻辑销毁（teamee_map 已空；当前 session implicit team 随 session 自动清理，无需 TeamDelete）
 
 ## 阶段间清理检查
 
@@ -255,15 +255,14 @@ AI 执行:
 ```python
 # 如果使用了 agent-dispatcher（批量执行）
 if used_agent_teams:
-    # 验证 TeamDelete 已执行
-    team_dir = f"~/.claude/teams/{team_name}/"
-    if directory_exists(team_dir):
-        print("⚠️ 警告: TeamDelete 未执行！")
-        print("建议手动执行: '清理团队'")
+    # 验证 Teamee 已逻辑销毁（teamee_map 已空）；当前 session implicit team 随 session 自动清理，无需 TeamDelete
+    if not teamee_map_empty:
+        print("⚠️ 警告: Teamee 未全部逻辑销毁（teamee_map 非空）！")
+        print("建议补执行 markTeameeDestroyed 清空映射表")
         # 在报告中标注此警告
 ```
 
 **检查点验证**：
 | 检查项 | 通过条件 | 失败处理 |
 |--------|----------|----------|
-| TeamDelete 已执行 | 团队目录不存在 | 在报告中添加警告，建议手动清理 |
+| Teamee 已逻辑销毁 | teamee_map 已空 | 在报告中添加警告，建议补执行 markTeameeDestroyed |

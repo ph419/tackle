@@ -1,6 +1,6 @@
-# Agent Dispatcher (Agent Teams 版)
+# Agent Dispatcher (Implicit Session Team 版)
 
-基于 **Claude Code Agent Teams** 机制的子代理批量任务调度技能，支持角色赋能和记忆注入。
+基于 **Claude Code implicit session team** 机制的子代理批量任务调度技能，支持角色赋能和记忆注入。
 
 ## When to Use
 
@@ -20,6 +20,35 @@
 
 ---
 
+## 团队机制现状 (🔴 必读)
+
+Claude Code harness 已升级到 **implicit single-team 模式**。本 skill 的运行前提已变化，阅读下表后再进入后续步骤:
+
+| 维度 | 旧(显式 Agent Teams) | 新(implicit session team) |
+|------|----------------------|---------------------------|
+| 团队创建 | Lead 调 `TeamCreate` 显式命名团队 | ❌ 工具已移除;每个 session 自动有一个 implicit team(`session-xxx`),subagent 自动加入 |
+| Agent 调用的 `team_name` 参数 | 必传,绑定到显式团队 | ❌ `Deprecated; ignored`;subagent 自动加入 implicit session team,文档不再传此参数 |
+| 协作能力(并行 spawn + SendMessage + 共享 Task List) | 由显式团队提供 | ✅ **仍由 implicit session team 提供,未丢失** |
+| 失去的能力 | — | 仅"显式命名团队管理":TeamCreate 命名、TeamDelete、按 `batch-xxx` 管理团队目录 |
+
+**本 skill 中 `team_name` 变量的重新定义**:
+- `team_name` **不再是 harness 团队名**(不再驱动 TeamCreate,不再作为 Agent 参数)。
+- `team_name` 现在是 **Lead 内部的"批次逻辑标签"**,仍用于:
+  - 状态文件 `dispatcher-state.json` 的 `team_name` 字段(标识"这批执行")
+  - 心跳 `heartbeat.json` 的 `session_id` / `team_name` 字段(供守护进程监控)
+  - 执行报告的批次标识
+  - idle 检测里 `assignment.team_name == team_name` 的批次一致性校验
+- 实际的 harness 团队由 session 自动分配,Lead 无需也无法干预。
+
+**清理流程的相应调整**:
+- 当前 session 的 implicit team 随 session 结束自动清理,**无需 TeamDelete**(工具也不存在)。
+- `team-cleanup` CLI 保留,定位调整为**清理历史残留的显式/UUID 团队目录**(如旧的 `cybershop-wp101`、UUID 命名团队),而非清理当前 session team。
+- session team 目录若需提前释放,仍可由 `team-cleanup` CLI 物理删除目录(CLI 内部直接走文件系统删除,**不调 TeamDelete**,见 cleanup-reference.md)。
+
+**关于 Teamee Prompt 模板**: `roles-reference.md` 的 Prompt 模板仍含历史措辞(`团队名称: {team_name}`、`shutdown_request` 响应协议帧)。Lead 实际构建 prompt 时以 `build_single_task_prompt()` 行为为准——Teamee 一经 spawn 自动加入 implicit session team,无需注入 harness 团队名;销毁走逻辑销毁(markTeameeDestroyed),不发 shutdown 协议帧。
+
+---
+
 ## Architecture
 
 ```
@@ -27,14 +56,14 @@
 │                      Team Lead (主 Agent)                    │
 │                                                             │
 │  1. 解析工作包 → 分析依赖                                     │
-│  2. TeamCreate 创建团队                                      │
+│  2. 初始化批次标签 team_name (Lead 内部逻辑标识)             │
 │  3. TaskCreate 创建任务 + 设置 blockedBy                      │
 │  4. 角色匹配 → 预计算每个 WP 的角色和记忆                      │
 │  5. 监控循环:                                                │
 │     - 检测 newly-unblocked 任务 → 按需创建专用 Teamee (1:1)  │
 │     - 检测已完成的任务 → 即时销毁对应 Teamee                   │
 │     - 维护映射表 {task_id → teamee_name}                     │
-│  6. 全部完成后 TeamDelete                                     │
+│  6. 全部完成后逻辑销毁 + 可选 team-cleanup 清理历史残留      │
 │  7. 经验提取 + completion-report                              │
 └─────────────────────────────────────────────────────────────┘
                               │
@@ -89,11 +118,11 @@
    ```
    销毁后**无需**等待响应、**无需**发送 shutdown。
 
-4. **团队目录清理走确定性 CLI**（批末统一执行）：
+4. **历史残留团队目录清理走确定性 CLI**（按需执行,非批末强制）：
    ```
-   node bin/tackle.js team-cleanup <team_name> --force
+   node bin/tackle.js team-cleanup <residual_team_name> --force
    ```
-   该 CLI 封装跨平台 `fs.rmSync` + 安全校验，绕过 harness Bash 权限系统。
+   该 CLI 封装跨平台 `fs.rmSync` + 安全校验，绕过 harness Bash 权限系统。注意:当前 session 的 implicit team 随 session 自动清理,本 CLI 仅用于清理**历史残留**的显式/UUID 团队目录(如旧 batch-xxx、cybershop-wp101 等)。CLI 内部直接走文件系统删除,**不调用 TeamDelete**(工具已移除)。
 
 **原则**：SendMessage 是**纯文本沟通通道**；Teamee 生命周期管理（销毁/清理）走**逻辑销毁 + CLI**，两者解耦。
 
@@ -111,7 +140,7 @@ digraph dispatcher_v3 {
     "检测循环依赖" [shape=diamond];
 
     // 团队创建
-    "TeamCreate 创建团队" [shape=box, style=filled, fillcolor=lightblue];
+    "初始化批次标签 team_name" [shape=box, style=filled, fillcolor=lightblue];
     "TaskCreate 创建任务" [shape=box, style=filled, fillcolor=lightblue];
     "设置 blockedBy 依赖" [shape=box];
 
@@ -137,17 +166,17 @@ digraph dispatcher_v3 {
     "超时?" [shape=diamond];
 
     // 收尾
-    "TeamDelete 清理团队" [shape=box];
+    "逻辑销毁残留 + 可选 team-cleanup CLI" [shape=box];
     "经验提取" [shape=box, style=filled, fillcolor=lightgreen];
     "生成执行报告" [shape=box];
 
     // 流程连接
     "解析工作包清单" -> "分析依赖关系";
     "分析依赖关系" -> "检测循环依赖";
-    "检测循环依赖" -> "TeamCreate 创建团队" [label="无循环"];
+    "检测循环依赖" -> "初始化批次标签 team_name" [label="无循环"];
     "检测循环依赖" -> "报错退出" [label="有循环", style=dashed];
 
-    "TeamCreate 创建团队" -> "TaskCreate 创建任务";
+    "初始化批次标签 team_name" -> "TaskCreate 创建任务";
     "TaskCreate 创建任务" -> "设置 blockedBy 依赖";
     "设置 blockedBy 依赖" -> "角色匹配 (预计算)";
 
@@ -165,12 +194,12 @@ digraph dispatcher_v3 {
     "检测已完成任务" -> "从映射表移除(逻辑销毁)" [label="有新完成"];
 
     "监控循环: TaskList" -> "所有任务 completed?";
-    "所有任务 completed?" -> "TeamDelete 清理团队" [label="是"];
+    "所有任务 completed?" -> "逻辑销毁残留 + 可选 team-cleanup CLI" [label="是"];
     "所有任务 completed?" -> "超时?" [label="否"];
     "超时?" -> "监控循环: TaskList" [label="否"];
-    "超时?" -> "TeamDelete 清理团队" [label="是"];
+    "超时?" -> "逻辑销毁残留 + 可选 team-cleanup CLI" [label="是"];
 
-    "TeamDelete 清理团队" -> "经验提取";
+    "逻辑销毁残留 + 可选 team-cleanup CLI" -> "经验提取";
     "经验提取" -> "生成执行报告";
 }
 ```
@@ -188,17 +217,29 @@ digraph dispatcher_v3 {
 4. 确定执行顺序（拓扑排序）
 ```
 
-### Step 2: 创建团队
+### Step 2: 初始化批次标签 team_name
+
+> ⚠️ **语义变更(implicit session team 模式)**: `team_name` **不再调用 TeamCreate**(工具已移除),也**不再作为 Agent 调用的参数**(harness 已忽略)。它现在只是 Lead 内部的"批次逻辑标签",用于状态文件、心跳、执行报告标识"这批执行"。实际团队由 harness 自动分配 implicit session team。
 
 ```
-TeamCreate:
-  team_name: "batch-{YYYYMMDD}-{work-package-ids}"
-  description: "批量执行 {WP-XXX, WP-YYY}"
+# Lead 内部变量赋值(无工具调用)
+team_name = "batch-{YYYYMMDD}-{work-package-ids}"  # 批次逻辑标签，非 harness 团队名
+# 实际 harness 团队是 implicit session-xxx，由 session 自动分配，Lead 无需也无法干预
 ```
 
-**命名规范**：
+**命名规范(批次标签,仅用于标识/可读性)**：
 - 单工作包: `batch-20260314-WP073` / `batch-20260314-WP1073`
 - 批量工作包: `batch-20260314-WP073-075` / `batch-20260314-WP1073-1075`
+
+**此标签的使用位置**:
+- 写入 `dispatcher-state.json` / `heartbeat.json`(见 Step 6.5)
+- idle 检测的批次一致性校验 `assignment.team_name == team_name`(见 Phase D2-idle)
+- 执行报告的批次标识(见 Execution Report)
+
+**不使用此标签的位置**:
+- ❌ 不作为 `Agent(team_name=...)` 参数(harness 已忽略)
+- ❌ 不驱动 TeamCreate(工具已移除)
+- ❌ 不作为 team-cleanup CLI 的目标(team-cleanup 用于历史残留,当前 session team 自动清理)
 
 ### Step 3: 创建任务 + 设置依赖
 
@@ -271,10 +312,9 @@ for task in tasks:
         # 预分配 owner
         TaskUpdate(taskId=task.id, owner=teamee_name)
 
-        # 创建专用 Teamee
+        # 创建专用 Teamee（自动加入 implicit session team，无需 team_name 参数）
         Agent(
             name=teamee_name,
-            team_name="{team_name}",
             subagent_type="general-purpose",  # 必须使用 general-purpose
             prompt=build_single_task_prompt(
                 teamee_name=teamee_name,
@@ -557,10 +597,9 @@ while (now() - start_time) < max_wait_time:
             # C3. 预分配 owner
             TaskUpdate(taskId=task.id, owner=teamee_name)
 
-            # C4. 创建专用 Teamee
+            # C4. 创建专用 Teamee（自动加入 implicit session team，无需 team_name 参数）
             Agent(
                 name=teamee_name,
-                team_name="{team_name}",
                 subagent_type="general-purpose",
                 prompt=build_single_task_prompt(
                     teamee_name=teamee_name,
@@ -669,10 +708,9 @@ while (now() - start_time) < max_wait_time:
                             failing_drivers=failing_drivers
                         )
 
-                    # D1c. 创建新 Teamee
+                    # D1c. 创建新 Teamee（自动加入 implicit session team，无需 team_name 参数）
                     Agent(
                         name=new_teamee_name,
-                        team_name="{team_name}",
                         subagent_type="general-purpose",
                         prompt=prompt
                     )
@@ -838,7 +876,7 @@ while (now() - start_time) < max_wait_time:
             )
             if not spawn_params_ok:
                 # ── 状态输出（直接文本输出，禁止使用 SendMessage）──
-                # 输出: "spawn 参数异常 (subagent_type/team_name/prompt 完整性)，将在重 spawn 时修正"
+                # 输出: "spawn 参数异常 (subagent_type/批次标签 team_name/prompt 完整性)，将在重 spawn 时修正"
                 pass
             # Step 3: 仍不执行 → 逻辑销毁旧 Teamee（无协议帧）
             markTeameeDestroyed(teamee_map, task_id)
@@ -857,9 +895,8 @@ while (now() - start_time) < max_wait_time:
                     wp_doc_path=assignment.wp_doc_path,
                     failing_drivers=[]  # idle 重 spawn 非失败项修复，failing_drivers 为空
                 )
-                Agent(
+                Agent(  # 自动加入 implicit session team，无需 team_name 参数
                     name=new_teamee_name,
-                    team_name="{team_name}",
                     subagent_type="general-purpose",
                     prompt=prompt
                 )
@@ -1255,7 +1292,12 @@ def build_refine_prompt(teamee_name, task_id, role_prompt, memories, wp_doc_path
 2. 检测到文件变更时 (通过 Git 状态或文件系统监听)
 3. 任务状态变更时 (完成/失败/重试)
 
-### Step 7: 清理团队
+### Step 7: 清理(逻辑销毁 + 历史残留目录可选清理)
+
+> ⚠️ **implicit session team 模式下的清理语义**:
+> - **当前 session 的 implicit team 随 session 结束自动清理,无需 TeamDelete**(工具也已移除)。
+> - Lead 在 Step 6.5 已通过 `markTeameeDestroyed` 完成所有 Teamee 的逻辑销毁(映射表已空)。
+> - 本步骤主要职责:① 确认 `teamee_map` 已空;② 可选地用 `team-cleanup` CLI 清理**历史残留**的显式/UUID 团队目录(如旧的 `cybershop-wp101`),**而非当前 session team**。
 
 **📖 在执行此步骤前，读取清理参考文档：**
 ```
@@ -1264,7 +1306,7 @@ Read("plugins/core/skill-agent-dispatcher/cleanup-reference.md")
 
 该文档包含：
 - **权限要求**: Bash 工具权限配置建议
-- **Step 7a-7h**: 完整清理流程（安全检查 → shutdown → TeamDelete → 验证）
+- **Step 7a-7h**: 完整清理流程（安全检查 → 逻辑销毁 → team-cleanup CLI → 验证）
 - **Error Handling**: 循环依赖、Teamee 失败、超时等错误处理
 - **Cleanup Guarantee**: 清理保障矩阵
 
@@ -1294,6 +1336,8 @@ Read("plugins/core/skill-agent-dispatcher/roles-reference.md")
 | 项目代码 | 共享同一工作目录 |
 
 ### 主动共享 (通过 SendMessage)
+
+> 注:Teamee 一经 spawn **自动加入 implicit session team**,无需 Lead 显式分配团队——SendMessage 与共享 Task List 的协作能力由 implicit session team 提供,未受 harness 团队机制变更影响。
 
 | 消息类型 | 格式 | 用途 |
 |----------|------|------|
@@ -1383,7 +1427,7 @@ docs/reports/{YYYY-MM-DD}_{工作包列表}_execution_report.md
 # 批量执行报告
 
 ## 基本信息
-- 团队名称: batch-20260314-WP073-075
+- 批次标签 (team_name): batch-20260314-WP073-075
 - 执行日期: 2026-03-14
 - 工作包: WP-073, WP-074, WP-075
 
@@ -1452,14 +1496,14 @@ docs/reports/{YYYY-MM-DD}_{工作包列表}_execution_report.md
 
 ## Important
 
-1. **TeamCreate 是必须的** - 没有团队就没有共享 Task List
+1. **implicit session team 自动提供协作能力** - 每个 session 自动有 implicit team,subagent 自动加入,共享 Task List + SendMessage 协作能力随之可用,**无需 TeamCreate**(工具已移除)。`team_name` 变量降级为 Lead 内部批次标签,不再驱动团队创建。
 2. **blockedBy 自动阻塞** - 依赖机制由 Task List 自动处理
 3. **Lead 按需分配 (1:1)** - 每个 WP 由 Lead 创建专用 Teamee 并预分配，禁止一个 Teamee 处理多个 WP
 4. **逻辑销毁 + 批末清理** - Teamee 完成后立即从映射表移除（markTeameeDestroyed，无协议帧）；目录级清理在批末统一执行（team-cleanup CLI）
 5. **角色匹配提升质量** - 专业角色比通用代理更高效
 6. **记忆注入避免踩坑** - 从历史经验中学习
 7. **经验沉淀形成闭环** - 每次执行都让角色更聪明
-8. **🔴 TeamDelete 是强制的** - 无论成功/失败/超时，都必须执行清理！(由 team-cleanup CLI 封装：先试 TeamDelete，失败回退文件系统删除)
+8. **🔴 Teamee 逻辑销毁是强制的,目录清理按需** - 无论成功/失败/超时,Lead 都必须通过 `markTeameeDestroyed` 清空 `teamee_map`(Step 6.5/Step 7 已保证);当前 session 的 implicit team 随 session 自动清理,**无需 TeamDelete**(工具已移除)。`team-cleanup` CLI 仅用于清理**历史残留**的显式/UUID 团队目录,定位为可选的运维清理工具。
 9. **🔴 监控循环不可跳过** - Lead 必须进入 Step 6.5 监控循环，负责动态创建和即时销毁
 10. **🔴 文件冲突不得触发合并** - 即使多个 WP 修改同一文件，也必须每 WP 一个 Teamee。blockedBy 依赖只以 WP 文档声明为准，禁止自行添加隐式依赖
 

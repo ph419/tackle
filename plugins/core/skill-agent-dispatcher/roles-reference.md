@@ -148,8 +148,9 @@ for task in tasks:
 {角色 prompt_template}
 
 ## 团队信息
-- 团队名称: {team_name}
+- 批次标签 (team_name): {team_name}（Lead 内部标识，非 harness 团队名）
 - 你的角色: {role_id}
+- 你已自动加入当前 session 的 implicit session team，可与 Lead 及其他 Teamee 通过 SendMessage / 共享 Task List 协作
 
 ## 任务绑定 (1:1 专用)
 
