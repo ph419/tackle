@@ -1,0 +1,6 @@
+# 强制全仓库文本文件行尾为 LF（覆盖 Windows core.autocrlf=true）。
+# 根治 working copy CRLF/mixed 导致的幽灵 diff：实测 106 个 tracked 文件
+# index 为 i/lf 但 working copy 为 w/crlf|w/mixed（如 bin/tackle.js w/mixed
+# 被 git status 误报 modified，而 git diff -w 为空）。
+# text=auto 由 git 自动识别二进制（图片等）并保留其原字节，不转行尾。
+* text=auto eol=lf
