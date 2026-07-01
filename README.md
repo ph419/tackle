@@ -3,7 +3,7 @@
 > 基于插件的 AI Agent 工作流框架，为 Claude Code 提供任务管理、工作流编排、角色管理等能力
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-0.3.17-blue.svg)](https://github.com/ph419/tackle-harness)
+[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)](https://github.com/ph419/tackle-harness)
 
 **[English](https://github.com/ph419/tackle-harness/blob/main/README.en.md)**
 
@@ -108,7 +108,7 @@ tackle-harness build
 | `tackle-harness config` | 显示/验证当前配置 |
 | `tackle-harness list` | 列出所有已注册的插件 |
 | `tackle-harness team-cleanup <name>` | 确定性清理残留的 Agent Teams 团队目录（WP-179） |
-| `tackle-harness loop <plan> [--executor=local\|default] [--settings=<path>] [--loop-id=X] [--max-iters=N]` | 以 Node 进程驱动 Agentic Loop（v0.3.4+；v0.3.10 起单一 default executor + 自动模型探测） |
+| `tackle-harness loop <plan> [--executor=local\|default] [--settings=<path>] [--loop-id=X] [--max-iters=N] [--concurrency=N]` | 以 Node 进程驱动 Agentic Loop（v0.3.4+；v0.3.10 单一 default executor；**v0.4.0 起 `--concurrency=N` readyWave 并发批调度**，默认 N=1=串行） |
 | `tackle-harness loop-server <start\|status\|list\|abort>` | 全局 loop 协调守护进程：聚合多 loop 视图、按 provider 管额度池、全局熔断（v0.3.6+） |
 | `tackle-harness version` | 显示版本信息 |
 | `tackle-harness --root <path>` | 指定目标项目路径（默认为当前目录） |

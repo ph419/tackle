@@ -150,6 +150,36 @@ test('driver + executor-local 收敛到 achieved（3 WP）', async function () {
   }
 });
 
+test('driver --concurrency=3 并发批 dispatch 3 无依赖 WP → achieved（Step 1）', async function () {
+  var env = setupEnv(3);
+  try {
+    var h = makeCtx(env.dir, [env.planPath, '--executor=local', '--concurrency=3']);
+    await loopCmd.execute(h.ctx);
+    assert.strictEqual(h.exitCode.value, 0, 'achieved should exit 0');
+    var combined = h.logs.join('\n');
+    assert.ok(combined.indexOf('achieved') !== -1, 'should report achieved');
+    assert.ok(combined.indexOf('dispatch batch') !== -1, 'concurrency>1 → dispatch batch 日志');
+    assert.ok(combined.indexOf('WP-1') !== -1 && combined.indexOf('WP-2') !== -1 &&
+      combined.indexOf('WP-3') !== -1, '三个 WP 均被 dispatch');
+  } finally {
+    env.restore();
+  }
+});
+
+test('driver 默认 concurrency=1 → 串行 dispatch（无 batch 日志 = v0.3.15）', async function () {
+  var env = setupEnv(3);
+  try {
+    var h = makeCtx(env.dir, [env.planPath, '--executor=local']);
+    await loopCmd.execute(h.ctx);
+    assert.strictEqual(h.exitCode.value, 0);
+    var combined = h.logs.join('\n');
+    assert.ok(combined.indexOf('dispatch batch') === -1, '默认 N=1 串行，无 batch 日志');
+    assert.ok(combined.indexOf('achieved') !== -1);
+  } finally {
+    env.restore();
+  }
+});
+
 test('driver 逐个 dispatch 不同 WP（缓存失效修复回归）', async function () {
   var env = setupEnv(3);
   try {

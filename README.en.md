@@ -3,7 +3,7 @@
 > A plugin-based AI Agent workflow framework that provides task management, workflow orchestration, and role management for Claude Code
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-0.3.17-blue.svg)](https://github.com/ph419/tackle-harness)
+[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)](https://github.com/ph419/tackle-harness)
 
 **[中文文档](https://github.com/ph419/tackle-harness/blob/main/README.md)**
 
@@ -106,7 +106,7 @@ tackle-harness build
 | `tackle-harness config` | Show/validate current configuration |
 | `tackle-harness list` | List all registered plugins |
 | `tackle-harness team-cleanup <name>` | Deterministically clean up residual Agent Teams directories (WP-179) |
-| `tackle-harness loop <plan> [--executor=local\|default] [--settings=<path>] [--loop-id=X] [--max-iters=N]` | Drive the Agentic Loop as a Node process (v0.3.4+; v0.3.10 single default executor + auto model detection) |
+| `tackle-harness loop <plan> [--executor=local\|default] [--settings=<path>] [--loop-id=X] [--max-iters=N] [--concurrency=N]` | Drive the Agentic Loop as a Node process (v0.3.4+; v0.3.10 single default executor; **v0.4.0 `--concurrency=N` readyWave batch dispatch**, default N=1=serial) |
 | `tackle-harness loop-server <start\|status\|list\|abort>` | Global loop coordinator daemon: aggregate multi-loop view, per-provider quota pool, global circuit break (v0.3.6+) |
 | `tackle-harness version` | Show version information |
 | `tackle-harness --root <path>` | Specify target project path (default: current directory) |

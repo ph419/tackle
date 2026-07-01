@@ -52,6 +52,11 @@ var loopTrace = require('../../plugins/runtime/loop-trace');
 var ConfigManager = require('../../plugins/runtime/config-manager');
 // provider 解析器（WP-188 重构）：探测生效模型 + 匹配 provider profile，决定 default executor 特性。
 var providerResolver = require('../../plugins/runtime/provider-resolver');
+// concurrent-dispatch Step 1（next-dev-plan Batch 2）：readyWave 批并发调度。
+//   driver 主循环单 WP dispatch → readyWave 批并发（Promise.allsettled 语义）+ 串行回填。
+//   默认 maxConcurrency=1 = v0.3.15 串行（回退安全）；--concurrency=N 或 harness-config 开启并发。
+//   单 executor 实例限流段同步原子，并发安全；quota 额度放大由 softThreshold/hardThreshold 兜底。
+var dispatchBatchLib = require('../../plugins/runtime/loop-dispatch-batch');
 
 // 默认 plan.md 路径（与 plan-reader DEFAULT_PLAN_RELATIVE 一致）
 var DEFAULT_PLAN_REL = path.join('.claude', 'plan.md');
@@ -79,6 +84,7 @@ function parseArgs(argv) {
     dryRun: false,
     force: false,
     settingsPath: null,
+    concurrency: null,
   };
   for (var i = 0; i < argv.length; i++) {
     var a = argv[i];
@@ -99,6 +105,9 @@ function parseArgs(argv) {
       out.dryRun = true;
     } else if (a === '--force') {
       out.force = true;
+    } else if (a.indexOf('--concurrency=') === 0) {
+      // concurrent-dispatch Step 1：readyWave 批并发度（默认 1 = 串行 = v0.3.15 回退安全）。
+      out.concurrency = parseInt(a.slice('--concurrency='.length), 10);
     } else if (a.indexOf('-') !== 0) {
       // 第一个非 flag 参数是 plan 路径
       if (!out.planPath) out.planPath = a;
@@ -761,6 +770,34 @@ module.exports = {
     var driven = 0;
     var loopError = null;
 
+    // concurrent-dispatch Step 1（next-dev-plan Batch 2）：并发批调度参数 + 状态。
+    //   maxConcurrency 优先级：--concurrency flag > harness-config loop.concurrency > 1（回退安全，
+    //   N=1 = v0.3.15 串行）。completedSet：已完成 WP（init 从 PROGRESS.md 恢复，支持 --loop-id
+    //   续跑；每轮 passed 更新）。loopGoal：Step 0 挂了 dependencyGraph 的 goal，算 pendingWps。
+    var configLoopConcurrency = null;
+    try {
+      var _cm2 = new ConfigManager();
+      var _cfgAll2 = _cm2.getAll();
+      if (_cfgAll2 && _cfgAll2.loop && typeof _cfgAll2.loop.concurrency === 'number') {
+        configLoopConcurrency = _cfgAll2.loop.concurrency;
+      }
+    } catch (_cfgErr2) { /* 降级：用 flag 或默认 1 */ }
+    var maxConcurrency = 1;
+    if (typeof args.concurrency === 'number' && !isNaN(args.concurrency) && args.concurrency > 0) {
+      maxConcurrency = Math.floor(args.concurrency);
+    } else if (typeof configLoopConcurrency === 'number' && configLoopConcurrency > 0) {
+      maxConcurrency = Math.floor(configLoopConcurrency);
+    }
+    var completedSet = [];
+    try {
+      var _initProg = snapshotMod._parseProgressMarkdown(wsRoot);
+      if (_initProg && Array.isArray(_initProg.completed)) completedSet = _initProg.completed.slice();
+    } catch (_e) { /* 降级：空 completedSet */ }
+    var loopGoal = (typeof initGoal !== 'undefined') ? initGoal : parsed.goal;
+    if (maxConcurrency > 1) {
+      log(ctx.colorize('concurrency: ' + maxConcurrency + ' (readyWave 并发批调度；N=1=串行回退)', 'cyan'));
+    }
+
     try {
       while (driven < safetyMax) {
         driven++;
@@ -815,29 +852,72 @@ module.exports = {
 
         if (pending && pending.wpId) {
           if (!args.dryRun) {
-            log(ctx.colorize('▶ dispatch ' + pending.wpId, 'cyan') +
-              ' (mode=' + pending.mode + ', iter=' + result.iteration + ')');
+            // concurrent-dispatch Step 1（next-dev-plan Batch 2）：算 readyWave（≤ maxConcurrency），
+            //   并发 dispatch + 串行回填。maxConcurrency=1 → wave=[pending.wpId] = v0.3.15 串行。
+            var _goalWps = (loopGoal && loopGoal.wpIds) ? loopGoal.wpIds.slice() : [];
+            var _depOrder = (loopGoal && loopGoal.dependencyGraph && loopGoal.dependencyGraph.order && loopGoal.dependencyGraph.order.length)
+              ? loopGoal.dependencyGraph.order : null;
+            var _seq = _depOrder || _goalWps;
+            var pendingWps = [];
+            for (var si = 0; si < _seq.length; si++) {
+              var _wid = _seq[si];
+              if (_goalWps.indexOf(_wid) !== -1 && completedSet.indexOf(_wid) === -1) {
+                pendingWps.push(_wid);
+              }
+            }
+            var wave = dispatchBatchLib.readyWaveFor({
+              dependencyGraph: (loopGoal && loopGoal.dependencyGraph) || null,
+              pendingWps: pendingWps,
+              completedSet: completedSet,
+              goalWps: _goalWps,
+              maxConcurrency: maxConcurrency,
+            });
+            // engine _think 已选 pending.wpId（readyWave[0]），防御性确保它在 wave 内
+            if (wave.indexOf(pending.wpId) === -1) wave.unshift(pending.wpId);
+            if (wave.length > maxConcurrency) wave = wave.slice(0, maxConcurrency);
+
+            if (wave.length === 1) {
+              log(ctx.colorize('▶ dispatch ' + wave[0], 'cyan') +
+                ' (mode=' + pending.mode + ', iter=' + result.iteration + ')');
+            } else {
+              log(ctx.colorize('▶ dispatch batch [' + wave.join(', ') + ']', 'cyan') +
+                ' (concurrency=' + wave.length + ', iter=' + result.iteration + ')');
+            }
             // WP-191-1-impl-a：dispatch 前刷新心跳。executor.run 是单轮最长耗时点
             //   （claude/glm 单轮可超 staleMs），刷新确保 coordinator 在此期间不误判 disconnected。
             if (workspace.isolated) touchExecutorSidecar(wsRoot);
-            var checkResult = await executor.run(pending);
 
-            // 回填 lastChecklist（供 reflection-evaluator 评分 proximity）
-            driverStore.invalidate();
-            await driverStore.set('loop.' + loopId + '.lastChecklist', checkResult);
+            var results = await dispatchBatchLib.dispatchBatch({
+              executor: executor,
+              pendingActionTemplate: pending,
+              wpIds: wave,
+            });
 
-            // 同步写 PROGRESS.md（硬约束 #5：snapshot 从这里读 completed）
-            //   隔离时 PROGRESS.md 落在 wsRoot（隔离目录），snapshot 的
-            //   parseProgressMarkdown 也基于 cwd 探测到同一目录，自然一致。
-            if (checkResult.passed) {
-              appendProgressLine(wsRoot, pending.wpId);
-              log('  ' + ctx.colorize('✓ ' + pending.wpId + ' passed', 'green'));
-            } else {
-              log('  ' + ctx.colorize('✗ ' + pending.wpId + ' failed', 'yellow') +
-                ' (' + (checkResult.failedItems || []).length + ' items)');
+            // 串行回填（driver 单线程 for 循环，天然串行，无并发写）。
+            //   硬约束 #5：snapshot 从 PROGRESS.md 读 completed；passed 即 appendProgressLine。
+            //   隔离时 PROGRESS.md 落在 wsRoot，snapshot 的 parseProgressMarkdown 基于 cwd 探测同目录。
+            for (var ri = 0; ri < results.length; ri++) {
+              var r = results[ri];
+              var cr = (r.status === 'fulfilled') ? r.checkResult : null;
+              if (cr && cr.passed) {
+                appendProgressLine(wsRoot, r.wpId);
+                if (completedSet.indexOf(r.wpId) === -1) completedSet.push(r.wpId);
+                log('  ' + ctx.colorize('✓ ' + r.wpId + ' passed', 'green'));
+              } else if (cr) {
+                log('  ' + ctx.colorize('✗ ' + r.wpId + ' failed', 'yellow') +
+                  ' (' + (cr.failedItems || []).length + ' items)');
+              } else {
+                log('  ' + ctx.colorize('✗ ' + r.wpId + ' ' + r.status, 'red') +
+                  (r.reason ? ': ' + String(r.reason && r.reason.message ? r.reason.message : r.reason) : ''));
+              }
+              // WP-196-1-impl：每 WP 一条 round record（engine 阶段 + executor trace）
+              emitRoundTrace(ctx, log, loopId, result, cr, r.wpId);
             }
-            // WP-196-1-impl：本轮 dispatch 完成，聚合 engine 阶段 + executor trace 落盘 + 一行摘要
-            emitRoundTrace(ctx, log, loopId, result, checkResult, pending.wpId);
+
+            // 回填聚合 lastChecklist（批内 N 个 CheckResult 合并，供 reflection-evaluator 评分 proximity）
+            var aggregated = dispatchBatchLib.aggregateCheckResults(results);
+            driverStore.invalidate();
+            await driverStore.set('loop.' + loopId + '.lastChecklist', aggregated);
           }
         } else {
           // noop decision（无可执行项）：继续下一轮，由 engine decide 判 achieved/发散

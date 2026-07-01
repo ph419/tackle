@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-07-01
+
+### Added
+
+- **loop driver 并发批调度 `--concurrency`（concurrent-dispatch Step 1 / next-dev-plan Batch 2）**：把 driver 主循环「单 WP 串行 dispatch」升级为「readyWave 批并发 dispatch」，直击 followup 唯一未决 P1「慢主因根因」（N 个无依赖 WP wall time 从 O(N×单轮) 降至 ≈单轮）。
+  - 新模块 `plugins/runtime/loop-dispatch-batch.js`（+ `test/runtime/test-loop-dispatch-batch.js`，13 用例）：`readyWaveFor`（拓扑入度 0 子集，限 maxConcurrency）+ `dispatchBatch`（`Promise.all` 并发，单失败不阻断同批）+ `aggregateCheckResults`（批内 N 个 CheckResult 合并，reflect 评分用）
+  - driver `bin/commands/loop.js`：maxConcurrency 解析（`--concurrency` flag > `harness-config` `loop.concurrency` > 1）+ `completedSet`（PROGRESS.md 恢复，支持续跑）+ 主循环单 `executor.run` → readyWave 批并发 + 串行回填（`appendProgressLine` / `emitRoundTrace` 每 WP 一条）+ 聚合 `lastChecklist`
+  - `templates/harness-config.yaml`：`loop.concurrency` 配置节（默认 1）
+  - **并发安全（决策 1：单实例 + 容忍放大）**：driver 复用单 executor 实例，`executor.run` 限流段（`callTimestamps`）+ quota 检查都在第一个 `await` 前同步 → Node 单线程原子串行，限流天然并发安全（无需 race-free acquire）。**推翻计划推荐的「每 spawn 独立实例」**——核实证明 `callTimestamps` check-then-act 竞态在 Node 单线程不真实，且独立 tracker 额度完全不共享放大更严重。quota 额度（5h 窗口）检查-消耗间隙：N>1 时批内放大，由 executor `softThreshold`(0.9) 下批降速 + coordinator `hardThreshold`(0.95) 熔断兜底，资源浪费有界
+  - **回退安全**：默认 N=1 → wave=[单 WP] = v0.3.15 串行（日志/回填/trace 完全一致）
+  - 不变量（WP-191 守住）：`engine/index.js` / `loop-actuator.js` / `plan-reader.js` git diff 为空（Step 1 零改动，已 git diff 核查）
+  - `aggregateCheckResults` 批内失败归因修复（commit 前 workflow 对抗 review 发现的 major）：executor 产出的 `failedItems` 不带条目级 `wpId`（executor-local/claude/default 的 `buildFailedChecklist` 仅 id/category/reason），批内聚合时给每项补源 WP 的 `wpId`，避免 `reflection-evaluator.failingWpsFromChecklist` 因 `fi.wpId` 缺失回退到聚合顶层 `wpIds[0]`、把批内某 WP 的失败错归因到首个 WP（可能已 passed）→ engine retry/resplit 指向错误 WP、真正失败的 WP 被掩盖。N=1 不受影响
+  - 测试：`test-loop-dispatch-batch.js` +14（`readyWaveFor` 6 / `dispatchBatch` 3 / `aggregateCheckResults` 5，含批内失败 wpId 归因）+ `test-loop-driver.js` +2（`--concurrency=3` 并发批 achieved / 默认 N=1 串行无 batch 日志）；全量 1753/0 零回归，build SUCCEEDED，validate 26 plugins 0错0警
+  - 已知限制（仅 N>1 触发，N=1 完全无影响）：(1) `readWorktreeDirty` 共用 `config.projectRoot`，批内 N 个 spawn 并发改同一工作树致 noProgress 脏度信号串扰（批内多 WP 改动倾向"有进展"，一般不误触发发散；彻底解决需 per-WP git worktree，超 Step 1；发散另有 coordinator hardThreshold + max_iterations 兜底）；(2) quota 额度检查-消耗间隙放大（softThreshold/hardThreshold 兜底）；(3) trace 批内 N 条 round record 共享同轮 engine phaseTimings（每条自带 dispatchedWp 可区分）
+  - benchmark 限制：并发收益（wall clock）进不了 CI（runner 无 claude binary），需本地 `--concurrency=N` + 真实 multi-WP plan 手测验证
+
+### Changed
+
+- README / harness-config 文档补 `--concurrency=N` / `loop.concurrency` 说明
+
 ## [0.3.17] - 2026-07-01
 
 ### Fixed
@@ -643,6 +663,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 插件注册表 (`plugin-registry.json`)
 - 运行时层：harness-build、plugin-loader、event-bus、state-store、config-manager、logger
 
+[0.4.0]: https://github.com/ph419/tackle-harness/compare/v0.3.17...v0.4.0
 [0.3.17]: https://github.com/ph419/tackle-harness/compare/v0.3.16...v0.3.17
 [0.3.16]: https://github.com/ph419/tackle-harness/compare/v0.3.15...v0.3.16
 [0.3.15]: https://github.com/ph419/tackle-harness/compare/v0.3.14...v0.3.15

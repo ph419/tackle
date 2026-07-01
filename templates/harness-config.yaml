@@ -235,6 +235,11 @@ memory:
 #   有独立的 per-provider 额度池配置（loop-server-core.js），两者解耦。
 # ---------------------------------------------------------------------------
 loop:
+  # concurrent-dispatch Step 1（next-dev-plan Batch 2）：readyWave 并发批调度度。
+  #   默认 1（串行 = v0.3.15 回退安全）；--concurrency flag 优先于此值。
+  #   N>1 时批内 quota 额度检查-消耗间隙放大，由 executor softThreshold(0.9) 下批降速 +
+  #   coordinator hardThreshold(0.95) 熔断兜底；GLM 5h 窗口接近上限时建议降回 1。
+  concurrency: 1
   providers:
     # 智谱 GLM（享 Coding Plan 套餐额度，走 claude CLI 中转合规）
     - key: glm
