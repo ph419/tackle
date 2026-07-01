@@ -77,26 +77,43 @@ function git(execFn, cwd, args) {
 }
 
 /**
- * 校验 repoRoot 是否为有效 git 仓库（git rev-parse --show-toplevel）。
- *   仅"非空输出"不够：git 会向上递归找父级 .git，若 repoRoot 恰好落在某个上层 git 仓库内
- *   （如 os.tmpdir() 在用户家目录 git 仓库内），会误判为 git 仓库。故进一步校验解析出的
- *   toplevel 与 repoRoot 指向同一目录（path.normalize 规范化后比较，兼容大小写/分隔符差异）。
+ * 校验 repoRoot 是否恰为某 git 仓库的 toplevel（不是其子目录、不是普通目录）。
+ *   设计意图（必须保留）：git rev-parse 会向上递归找父级 .git，若 repoRoot 落在某个上层
+ *   git 仓库内（如 os.tmpdir() 在用户家目录 git 仓库内），仅判"git 是否能跑"会误判为仓库。
+ *   须进一步确认 repoRoot 自身就是 toplevel，而非父仓库的子目录。
+ *
+ *   实现关键（CI Windows 根因修复，WP follow-up）：
+ *   旧实现用 path.relative(realpathSync(top), realpathSync(repoRoot)) === '' 做字符串比对。
+ *   但 CI Windows runner 的 os.tmpdir() 返回 8.3 短名（C:\Users\RUNNER~1\...，长名 runneradmin），
+ *   mkdtempSync 产生的 repoRoot 含 RUNNER~1，而 git rev-parse --show-toplevel 返回长名 runneradmin。
+ *   node 18/20 的 fs.realpathSync（JS 实现）在 Windows 上**不解析 8.3 短名**，两路 realpathSync
+ *   仍分别带 RUNNER~1 / runneradmin → path.relative 非空 → 误判 false（macos/ubuntu 无此问题）。
+ *
+ *   新方案彻底绕开 node 路径规范化与字符串比对，改由 git 自身作答：
+ *     git rev-parse --show-toplevel --show-cdup
+ *   一次调用得两行输出（均相对同一 cwd，无跨字符串比较）：
+ *     - toplevel 非空：确为某 git 仓库的工作树（普通目录外 → git 退出码 128 → !r.ok → false）；
+ *     - cdup === ''（空串）：cwd 距 toplevel 的相对路径为空 → cwd 即 toplevel（恰在仓库根）；
+ *       cdup 形如 '../' / '../../' 表示 cwd 在 toplevel 子目录内 → 父级仓库误判防护命中 → false。
+ *   git 内部对 cwd 的解析与对 toplevel 的解析口径一致，不引入 node realpathSync 的短名盲区，
+ *   且天然兼容 worktree（.git 为文件）/ 大小写不敏感 FS / 符号链接（git 自行 resolve，不经 node）。
  * @param {Function} execFn
  * @param {string} repoRoot
  * @returns {boolean}
  */
 function isGitRepo(execFn, repoRoot) {
-  var r = git(execFn, repoRoot, ['rev-parse', '--show-toplevel']);
-  if (!r.ok) return false;
-  var top = r.out.trim();
-  if (!top) return false;
-  // 规范化比较（Windows 路径大小写/分隔符差异）： realpathSync 解析任意符号链接/大小写
-  try {
-    return path.relative(path.normalize(fs.realpathSync(top)), path.normalize(fs.realpathSync(repoRoot))) === '';
-  } catch (_e) {
-    // realpath 失败（如路径含特殊字符）退回字符串比较
-    return path.normalize(top) === path.normalize(repoRoot);
-  }
+  // 单次 git 调用同取 toplevel + cdup（相对同一 cwd，规避跨字符串路径比较的短名陷阱）
+  var r = git(execFn, repoRoot, ['rev-parse', '--show-toplevel', '--show-cdup']);
+  if (!r.ok) return false; // 非 git 仓库 / git 不可用 / 不在工作树内
+  var lines = r.out.split(/\r?\n/);
+  var top = lines[0] ? lines[0].trim() : '';
+  var cdup = lines[1] ? lines[1].trim() : '';
+  if (!top) return false; // 无 toplevel → 非工作树（如 bare repo / 异常）
+  // 防御：toplevel 须形似绝对路径（含路径分隔符），杜绝退化输入（裸 cdup 行如 '../'）被当 toplevel。
+  //   正常 git exit-0 路径下 toplevel 必为非空绝对路径，此断言永不误杀；异常输出时 fail-safe 返 false。
+  if (top.indexOf('/') === -1 && top.indexOf('\\') === -1) return false;
+  // cdup 空串 ⇔ cwd 即 toplevel；非空（'../' 等）⇔ repoRoot 落在父仓库子目录内 → 误判防护
+  return cdup === '';
 }
 
 /**

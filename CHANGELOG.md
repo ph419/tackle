@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.2] - 2026-07-01
+
+### Fixed
+
+- **`isGitRepo` 在 CI Windows 8.3 短名路径下误判非 git 仓库（major，Windows-only CI 阻塞）**：v0.4.1 的 per-WP git worktree 隔离在 CI windows-latest（node 18/20）全部失败——`test-loop-worktree.js` 的 `_isGitRepo` 对真实 git repo 误返 false，连带 `createWorktreeForWp` 降级 `not_a_git_repo`、`wtMap` 为空，driver 层 worktree 接线测试（隔离激活 / rejected 跳过合并 / 冲突回写）全挂。macos/ubuntu 不受影响。
+  - 根因：CI Windows runner 的 `os.tmpdir()` 返回 8.3 短名 `C:\Users\RUNNER~1\...`（长名 `runneradmin`，CI 日志「使用 state 文件 C:\Users\RUNNER~1\...」铁证）；`mkdtempSync` 产生的 repoRoot 含 `RUNNER~1`，而 `git rev-parse --show-toplevel` 返回长名。旧实现用 `path.relative(realpathSync(top), realpathSync(repoRoot))===''` 做字符串比对，但 **node 18/20 的 `fs.realpathSync`（JS 实现）在 Windows 上不解析 8.3 短名** → 两路 realpathSync 仍分别带 `RUNNER~1`/`runneradmin` → `path.relative` 非空 → 误判非 git 仓库 → worktree 隔离降级
+  - 修复（workflow 3 视角对抗评审一致收敛 + 真机复现验证）：改由 git 自身作答——单次 `git rev-parse --show-toplevel --show-cdup`，判 `toplevel 非空 && cdup===''` ⇔ cwd 恰为仓库根。`cdup`（git 相对 cwd 算出的「距 toplevel 的相对路径」）与 toplevel 同源同口径（同一 git 进程解析 cwd），**彻底绕开 node realpathSync 的 8.3 短名盲区**，对 node 版本完全不敏感
+  - 防护保留：父级仓库子目录（`cdup='../'`）→ false；bare repo（git exit 128）→ false；worktree（`.git` 为文件）→ cdup 空 → true；大小写不敏感 FS / 符号链接不经 node 路径比对，无歧义。新增防御：toplevel 须形似绝对路径（含路径分隔符），杜绝退化输入被误判（fail-safe，正常 git 输出永不误杀）
+  - 验证：3 视角对抗审查全部 `verdict=sound`（confidence 0.92–0.97）；验证 agent 构造长名目录 `ThisIsAVeryLongDirNameForShortNameTesting123` → 短名 `THISIS~1`，真机复现旧实现返 false + 新实现返 true（决定性铁证：旧 `realpathSync(短名)` 仍返 `THISIS~1`、`realpathSync(top)` 返长名 → `path.relative` 非空）；本地 `test-loop-worktree.js` 21/21 + `test-loop-driver.js` 64/64 全绿
+
 ## [0.4.1] - 2026-07-01
 
 ### Added
@@ -686,6 +696,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 插件注册表 (`plugin-registry.json`)
 - 运行时层：harness-build、plugin-loader、event-bus、state-store、config-manager、logger
 
+[0.4.2]: https://github.com/ph419/tackle-harness/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/ph419/tackle-harness/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/ph419/tackle-harness/compare/v0.3.17...v0.4.0
 [0.3.17]: https://github.com/ph419/tackle-harness/compare/v0.3.16...v0.3.17
