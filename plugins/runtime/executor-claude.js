@@ -508,6 +508,18 @@ function createExecutor(opts) {
     pendingAction = pendingAction || {};
     var wpId = pendingAction.wpId || 'unknown';
 
+    // concurrent-dispatch Step 2（per-WP worktree 隔离）：
+    //   per-call projectRoot override。批内 N 个并发 run 各自走独立 worktree（loop.js
+    //   传入 pendingAction.projectRoot = wtPath），使 readWorktreeDirty 的 dirtyBefore/
+    //   dirtyAfter per-WP 准确、互不串扰（修复 v0.4.0 noProgress 批级串扰）。
+    //   不传 → 走 config.projectRoot（零回归 = v0.4.0 行为）。
+    var runCwd = (typeof pendingAction.projectRoot === 'string' && pendingAction.projectRoot)
+      ? pendingAction.projectRoot : config.projectRoot;
+    // noProgressForceZero（--no-progress-detect escape hatch，文档 §5.5）：批模式强制
+    //   脏度降级（dirtyBefore/dirtyAfter=null → applyProgressDetection 走降级 noProgress=false），
+    //   牺牲发散检测精度换稳定性，~0 行内联（仅置 null，无需 worktree 基建）。
+    var forceZeroProgress = pendingAction.noProgressForceZero === true;
+
     // WP-196-1-impl / token-usage：executor.run 打点（仅观测，不引入 provider 分支）。
     //   采集 {spawnMs, exitCode, timedOut, rateLimited, tokenUsage, endpointMs} 附在 checkResult._executorTrace。
     //   tokenUsage/endpointMs 在 close 回调由 extractMetaFromClaudeStdout 填充；限流/失败路径保持 null。
@@ -525,10 +537,11 @@ function createExecutor(opts) {
     callTimestamps.push(now);
 
     // 进展检测基线（WP-191-2-impl）：执行前工作树脏度（porcelain）
-    var dirtyBefore = readWorktreeDirty(config.projectRoot, gitStatusFn);
+    //   forceZeroProgress → 跳过采样（置 null），applyProgressDetection 走降级 noProgress=false
+    var dirtyBefore = forceZeroProgress ? null : readWorktreeDirty(runCwd, gitStatusFn);
 
     // 构造 prompt + args
-    var prompt = buildPrompt(pendingAction, config.projectRoot);
+    var prompt = buildPrompt(pendingAction, runCwd);
     var args = buildClaudeArgs(config.allowedTools, config.settingsPath);
 
     // spawn + 超时控制
@@ -538,7 +551,7 @@ function createExecutor(opts) {
     var child;
     try {
       child = spawnFn(config.binary, args, {
-        cwd: config.projectRoot,
+        cwd: runCwd,
         encoding: 'utf8',
         stdio: ['pipe', 'pipe', 'pipe'],
       });
@@ -615,7 +628,8 @@ function createExecutor(opts) {
 
         // 进展检测（WP-191-2-impl）：执行后工作树脏度 → 标注 noProgress
         // 语义见 applyProgressDetection：工作树有改动=有进展；干净+passed=false=无进展
-        var dirtyAfter = readWorktreeDirty(config.projectRoot, gitStatusFn);
+        // forceZeroProgress → 置 null 走降级（与 dirtyBefore 对称）
+        var dirtyAfter = forceZeroProgress ? null : readWorktreeDirty(runCwd, gitStatusFn);
         applyProgressDetection(chk, dirtyBefore, dirtyAfter);
         // 非 0 退出码但解析出结果：仍用解析结果（claude 可能正常输出后非 0 退出）
         // 非 0 退出码且无解析结果：视为失败

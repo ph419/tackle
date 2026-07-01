@@ -419,3 +419,50 @@ test('_createQuotaTracker：窗口/周消耗与 prune', function () {
   assert.strictEqual(tracker.weekUsed(), 4, '周内仍累计');
   assert.strictEqual(tracker.windowRatio(), 0.2, '0/10 vs 4/20 取大 = 0.2');
 });
+
+// ─────────────────────────────────────────────
+// Section: per-call projectRoot override + noProgressForceZero（concurrent-dispatch Step 2）
+// ─────────────────────────────────────────────
+
+test('per-call projectRoot override：spawn cwd 与 readWorktreeDirty 都走 override', async function () {
+  var dirA = '/tmp/should-not-be-used-A';
+  var dirB = '/tmp/should-not-be-used-B';
+  var fakeSpawn = makeFakeSpawn({ stdout: makeClaudeStdout({ wpId: 'WP-1', passed: true, summary: { total: 1, passed: 1, failed: 0 } }) });
+  var queriedCwds = [];
+  var gitStatusFn = function (_args, opts) {
+    queriedCwds.push(opts && opts.cwd);
+    return '';
+  };
+  var exec = createExecutor({ spawnFn: fakeSpawn, projectRoot: dirA, gitStatusFn: gitStatusFn });
+  await exec.run(Object.assign({}, makePending('WP-1'), { projectRoot: dirB }));
+
+  assert.strictEqual(fakeSpawn.calls[0].opts.cwd, dirB, 'spawn cwd 走 override');
+  assert.strictEqual(queriedCwds.length, 2, '执行前后各查一次脏度');
+  assert.strictEqual(queriedCwds[0], dirB, 'dirtyBefore 走 override cwd');
+  assert.strictEqual(queriedCwds[1], dirB, 'dirtyAfter 走 override cwd');
+});
+
+test('不传 per-call projectRoot → 走 config.projectRoot（零回归）', async function () {
+  var dir = '/tmp/default-cwd';
+  var fakeSpawn = makeFakeSpawn({ stdout: makeClaudeStdout({ wpId: 'WP-1', passed: true, summary: { total: 1, passed: 1, failed: 0 } }) });
+  var exec = createExecutor({ spawnFn: fakeSpawn, projectRoot: dir });
+  await exec.run(makePending('WP-1'));
+
+  assert.strictEqual(fakeSpawn.calls[0].opts.cwd, dir, '走 config.projectRoot');
+});
+
+test('noProgressForceZero=true → 不采样脏度，noProgress=false（escape hatch）', async function () {
+  var fakeSpawn = makeFakeSpawn({
+    stdout: makeClaudeStdout({ wpId: 'WP-1', passed: false, summary: { total: 1, passed: 0, failed: 1 }, failedItems: [{ category: 't', id: 't1', reason: 'r' }] }),
+  });
+  var sampledCount = 0;
+  var gitStatusFn = function () { sampledCount += 1; return ''; };
+  var exec = createExecutor({ spawnFn: fakeSpawn, projectRoot: '/tmp/x', gitStatusFn: gitStatusFn });
+  var result = await exec.run(Object.assign({}, makePending('WP-1'), { noProgressForceZero: true }));
+
+  assert.strictEqual(sampledCount, 0, 'forceZero 时不应采样脏度');
+  assert.strictEqual(result.noProgress, false, 'forceZero → 降级 noProgress=false');
+  assert.ok(!result.failedItems.some(function (fi) { return fi.category === 'progress'; }),
+    '不应追加 progress 失败项');
+});
+

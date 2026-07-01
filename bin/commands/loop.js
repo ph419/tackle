@@ -57,6 +57,10 @@ var providerResolver = require('../../plugins/runtime/provider-resolver');
 //   默认 maxConcurrency=1 = v0.3.15 串行（回退安全）；--concurrency=N 或 harness-config 开启并发。
 //   单 executor 实例限流段同步原子，并发安全；quota 额度放大由 softThreshold/hardThreshold 兜底。
 var dispatchBatchLib = require('../../plugins/runtime/loop-dispatch-batch');
+// concurrent-dispatch Step 2（per-WP git worktree 隔离）：为批内每 WP 建独立 worktree，
+//   executor.run 在各自 cwd 跑，readWorktreeDirty per-WP 准确、互不串扰（修复 v0.4.0 noProgress
+//   批级串扰）。非 git 仓库 / local executor / 无 --loop-id 时降级回旧行为（不阻断）。
+var worktreeMod = require('../../plugins/runtime/loop-worktree');
 
 // 默认 plan.md 路径（与 plan-reader DEFAULT_PLAN_RELATIVE 一致）
 var DEFAULT_PLAN_REL = path.join('.claude', 'plan.md');
@@ -85,6 +89,7 @@ function parseArgs(argv) {
     force: false,
     settingsPath: null,
     concurrency: null,
+    noProgressDetect: false,
   };
   for (var i = 0; i < argv.length; i++) {
     var a = argv[i];
@@ -108,6 +113,10 @@ function parseArgs(argv) {
     } else if (a.indexOf('--concurrency=') === 0) {
       // concurrent-dispatch Step 1：readyWave 批并发度（默认 1 = 串行 = v0.3.15 回退安全）。
       out.concurrency = parseInt(a.slice('--concurrency='.length), 10);
+    } else if (a === '--no-progress-detect') {
+      // concurrent-dispatch Step 2（文档 §5.5 escape hatch）：批模式(N>1)强制 noProgress 归零
+      //   不累计发散。牺牲 per-WP 进展归因精度换稳定性（worktree 隔离降级时的兜底）。
+      out.noProgressDetect = true;
     } else if (a.indexOf('-') !== 0) {
       // 第一个非 flag 参数是 plan 路径
       if (!out.planPath) out.planPath = a;
@@ -852,6 +861,15 @@ module.exports = {
 
         if (pending && pending.wpId) {
           if (!args.dryRun) {
+            // concurrent-dispatch Step 2（--no-progress-detect escape hatch，文档 §5.5）：
+            //   N>1 且显式 opt-in 时，给 pendingAction 注入 noProgressForceZero，
+            //   executor.run 据此把 dirtyBefore/dirtyAfter 置 null（applyProgressDetection 走
+            //   降级 noProgress=false，不累计发散）。牺牲 per-WP 进展归因精度换稳定性。
+            //   N=1 无串扰，无需此 flag（不注入 = 零回归）。
+            if (args.noProgressDetect && maxConcurrency > 1) {
+              pending.noProgressForceZero = true;
+            }
+
             // concurrent-dispatch Step 1（next-dev-plan Batch 2）：算 readyWave（≤ maxConcurrency），
             //   并发 dispatch + 串行回填。maxConcurrency=1 → wave=[pending.wpId] = v0.3.15 串行。
             var _goalWps = (loopGoal && loopGoal.wpIds) ? loopGoal.wpIds.slice() : [];
@@ -887,18 +905,136 @@ module.exports = {
             //   （claude/glm 单轮可超 staleMs），刷新确保 coordinator 在此期间不误判 disconnected。
             if (workspace.isolated) touchExecutorSidecar(wsRoot);
 
+            // concurrent-dispatch Step 2（per-WP git worktree 隔离）：
+            //   仅 N>1 + default executor + 隔离模式启用：为批内每 WP 建独立 git worktree，
+            //   executor.run 经 wpProjectRoots 透传 pendingAction.projectRoot=wtPath，
+            //   readWorktreeDirty per-WP 准确、互不串扰（修复 v0.4.0 noProgress 批级串扰）。
+            //   N=1 / local executor / 无 --loop-id / 非 git 仓库 → 跳过（零回归 = v0.4.0）。
+            //   wtMap：{wpId: wtPath}；degraded 的 WP 不写入（executor 走 config.projectRoot）。
+            //   wtBranches：{wpId: branch}，批后 cherry-pick + 清理用。
+            var wtMap = {};
+            var wtBranches = {};
+            var enableWorktree = (maxConcurrency > 1 && args.executor !== 'local' && workspace.isolated);
+            if (enableWorktree) {
+              for (var wi = 0; wi < wave.length; wi++) {
+                var _wpId = wave[wi];
+                try {
+                  var wt = worktreeMod.createWorktreeForWp({
+                    repoRoot: projectRoot,
+                    loopId: loopId,
+                    wpId: _wpId,
+                    worktreesDir: path.join(wsRoot, '.tackle'),
+                  });
+                  if (!wt.degraded && wt.wtPath) {
+                    wtMap[_wpId] = wt.wtPath;
+                    wtBranches[_wpId] = wt.branch;
+                  } else {
+                    log(ctx.colorize('  · ' + _wpId + ' worktree 降级 (' + (wt.reason || 'unknown') +
+                      ')，退回共享工作树', 'yellow'));
+                  }
+                } catch (e) {
+                  // 容错：worktree 基建失败绝不阻断 loop（承袭 WP-191/196 降级纪律）
+                  log(ctx.colorize('  · ' + _wpId + ' worktree 创建异常: ' +
+                    ((e && e.message) ? e.message : String(e)) + '，退回共享工作树', 'yellow'));
+                }
+              }
+              if (Object.keys(wtMap).length > 0) {
+                log(ctx.colorize('  · per-WP worktree 隔离: ' +
+                  Object.keys(wtMap).join(', '), 'cyan'));
+              }
+            }
+
             var results = await dispatchBatchLib.dispatchBatch({
               executor: executor,
               pendingActionTemplate: pending,
               wpIds: wave,
+              wpProjectRoots: Object.keys(wtMap).length > 0 ? wtMap : null,
             });
 
             // 串行回填（driver 单线程 for 循环，天然串行，无并发写）。
             //   硬约束 #5：snapshot 从 PROGRESS.md 读 completed；passed 即 appendProgressLine。
             //   隔离时 PROGRESS.md 落在 wsRoot，snapshot 的 parseProgressMarkdown 基于 cwd 探测同目录。
+            //   Step 2：批后每 WP 的 worktree 改动 commit 到其分支 → cherry-pick 回主分支 → 清理。
             for (var ri = 0; ri < results.length; ri++) {
               var r = results[ri];
               var cr = (r.status === 'fulfilled') ? r.checkResult : null;
+
+              // Step 2 worktree 收尾：commit WP 改动 → merge 回主分支 → remove。
+              //   仅当该 WP 启用了 worktree（wtMap 有记录）。全程 try/catch 降级。
+              //
+              //   合并门控（concurrent-dispatch Step 2 评审修复，文档 §5.4）：
+              //     仅 fulfilled && passed 的 WP 才 commit + cherry-pick 进主分支。
+              //     - rejected（executor.run 抛错：超时/崩溃/断网）→ worktree 内是半成品，
+              //       并入主分支污染历史。
+              //     - fulfilled 但未 passed（验收未过）→ 改动未通过校验，并入 main 后该 WP
+              //       却未标完成（appendProgressLine 仅 passed 才标），下轮 retry 从含自身
+              //       半成品的 main 重拉 worktree = 在烂基础上重试，且与 completedSet 信号矛盾。
+              //     两者都跳过 merge，改动随 worktree remove 丢弃 → 下轮从干净 main 重试。
+              //     这与 appendProgressLine「passed 才标完成」对齐：merge iff passed（main 只含已校验改动）。
+              //   removeWorktree 无论成败都执行（finally，防 worktree/分支残留）。
+              if (wtMap[r.wpId]) {
+                try {
+                  if (r.status === 'fulfilled' && cr && cr.passed) {
+                    // 1. 在 worktree 内 commit 改动（claude 只改工作树不自动 commit）
+                    var _wtPath = wtMap[r.wpId];
+                    var _execGit = function () {
+                      var cp = require('child_process');
+                      return cp.execFileSync.apply(cp, arguments);
+                    };
+                    // git add -A（捕获所有改动，含新增/删除文件）
+                    _execGit('git', ['add', '-A'], { cwd: _wtPath, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10000 });
+                    // commit（--allow-empty 防空 commit 报错；message 含 wpId 供追溯）
+                    _execGit('git', ['commit', '-m', 'tackle: WP ' + r.wpId + ' (loop ' + loopId + ')',
+                      '--allow-empty'], { cwd: _wtPath, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10000 });
+
+                    // 2. cherry-pick 该分支回主分支（在 projectRoot 主工作树执行）
+                    var m = worktreeMod.mergeWorktreeBranch({
+                      repoRoot: projectRoot,
+                      branch: wtBranches[r.wpId],
+                      wpId: r.wpId,
+                    });
+                    if (m.conflict) {
+                      // cherry-pick 冲突：改动未并入主分支。回写 cr.passed=false + failedItem，
+                      //   使 engine 经 aggregated 感知失败、触发 retry/resplit。否则 passed 的 WP
+                      //   冲突时改动丢失却仍被 appendProgressLine 标完成 = 隐性数据丢失。
+                      //   cr 是 r.checkResult 同一引用，下方 if(cr&&cr.passed) 与 aggregateCheckResults
+                      //   都读回写后的值，保证 completedSet / lastChecklist 一致。
+                      if (cr) {
+                        cr.passed = false;
+                        cr.failedItems = Array.isArray(cr.failedItems) ? cr.failedItems : [];
+                        cr.failedItems.push({
+                          wpId: r.wpId, category: 'worktree', id: 'merge_conflict',
+                          reason: 'cherry-pick 冲突，改动未并入主分支（需 retry/resplit）',
+                        });
+                      }
+                      log(ctx.colorize('  ⚠ ' + r.wpId + ' worktree merge 冲突（改动未并入主分支，已回写失败交 retry/resplit）', 'yellow'));
+                    } else if (m.degraded) {
+                      log(ctx.colorize('  · ' + r.wpId + ' worktree merge 降级 (' + (m.reason || 'unknown') + ')', 'yellow'));
+                    } else if (m.merged) {
+                      log(ctx.colorize('  · ' + r.wpId + ' worktree merged', 'cyan'));
+                    }
+                  } else {
+                    // rejected 或未 passed：跳过 commit + merge（不污染主分支），仅记录
+                    var _skipWhy = (r.status === 'rejected')
+                      ? '执行 rejected（半成品不并入主分支）'
+                      : '未通过验收（改动不并入，下轮从干净 main 重试）';
+                    log(ctx.colorize('  · ' + r.wpId + ' worktree 跳过合并（' + _skipWhy + '）', 'gray'));
+                  }
+                } catch (e) {
+                  log(ctx.colorize('  · ' + r.wpId + ' worktree merge 异常: ' +
+                    ((e && e.message) ? e.message : String(e)) + '（改动未并入）', 'yellow'));
+                } finally {
+                  // 3. 清理 worktree + 分支（无论 merge 成败/是否跳过都清理，best-effort）
+                  try {
+                    worktreeMod.removeWorktree({
+                      repoRoot: projectRoot,
+                      wtPath: wtMap[r.wpId],
+                      branch: wtBranches[r.wpId],
+                    });
+                  } catch (_e) { /* best-effort，残留 .tackle/ 已 gitignored */ }
+                }
+              }
+
               if (cr && cr.passed) {
                 appendProgressLine(wsRoot, r.wpId);
                 if (completedSet.indexOf(r.wpId) === -1) completedSet.push(r.wpId);

@@ -263,6 +263,15 @@ function createExecutor(opts) {
     pendingAction = pendingAction || {};
     var wpId = pendingAction.wpId || 'unknown';
 
+    // concurrent-dispatch Step 2（per-WP worktree 隔离）：
+    //   per-call projectRoot override（与 executor-claude 一致）。批内 N 个并发 run 各走独立
+    //   worktree，readWorktreeDirty per-WP 准确、互不串扰（修复 v0.4.0 noProgress 批级串扰）。
+    //   不传 → 走 config.projectRoot（零回归 = v0.4.0）。
+    var runCwd = (typeof pendingAction.projectRoot === 'string' && pendingAction.projectRoot)
+      ? pendingAction.projectRoot : config.projectRoot;
+    // noProgressForceZero（--no-progress-detect escape hatch，文档 §5.5）。
+    var forceZeroProgress = pendingAction.noProgressForceZero === true;
+
     // WP-196-1-impl / token-usage：executor.run 打点（仅观测，不引入 provider 分支）。
     //   采集 {spawnMs, exitCode, timedOut, rateLimited, tokenUsage, endpointMs} 附在 checkResult._executorTrace；
     //   全程容错，缺失字段降级为 null。tokenUsage/endpointMs 在 close 回调由 extractMetaFromClaudeStdout 填充。
@@ -286,10 +295,11 @@ function createExecutor(opts) {
     }
 
     // 进展检测基线（WP-191-2-impl，复用 executor-claude 的工作树脏度判定）
-    var dirtyBefore = readWorktreeDirty(config.projectRoot, gitStatusFn);
+    //   forceZeroProgress → 跳过采样（置 null），applyProgressDetection 走降级 noProgress=false
+    var dirtyBefore = forceZeroProgress ? null : readWorktreeDirty(runCwd, gitStatusFn);
 
     // 构造 prompt（复用 executor-claude）+ args
-    var prompt = buildPrompt(pendingAction, config.projectRoot);
+    var prompt = buildPrompt(pendingAction, runCwd);
     var args = buildDefaultArgs(config.allowedTools, config.settingsPath, config.model);
 
     // spawn + 超时控制
@@ -303,7 +313,7 @@ function createExecutor(opts) {
     var child;
     try {
       child = spawnFn(config.binary, args, {
-        cwd: config.projectRoot,
+        cwd: runCwd,
         encoding: 'utf8',
         stdio: ['pipe', 'pipe', 'pipe'],
       });
@@ -385,7 +395,8 @@ function createExecutor(opts) {
         var chk = normalizeCheckResult(raw, wpId);
 
         // 进展检测（WP-191-2-impl，复用 executor-claude.applyProgressDetection）
-        var dirtyAfter = readWorktreeDirty(config.projectRoot, gitStatusFn);
+        // forceZeroProgress → 置 null 走降级（与 dirtyBefore 对称）
+        var dirtyAfter = forceZeroProgress ? null : readWorktreeDirty(runCwd, gitStatusFn);
         applyProgressDetection(chk, dirtyBefore, dirtyAfter);
         // 非 0 退出码且无解析结果 → 失败
         if (code !== 0 && !raw) {

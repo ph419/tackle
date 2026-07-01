@@ -22,11 +22,13 @@
  *   - maxConcurrency=1 时行为与 v0.3.15 串行完全一致（回退安全）
  *
  * 已知限制（仅 N>1 触发，N=1 完全无影响）：
- *   - 工作树脏度信号串扰：executor.run 内的 readWorktreeDirty 共用 config.projectRoot，
- *     批内 N 个 spawn 并发改同一工作树，dirtyBefore/dirtyAfter 互相污染 → noProgress 信号在
- *     批模式不可靠（批内多 WP 改动倾向"有进展"，一般不误触发发散；发散判定精度下降）。
- *     彻底解决需 per-WP git worktree 隔离（超 Step 1 范围）。批模式发散另有 coordinator
- *     hardThreshold(0.95) + max_iterations 双兜底，不会失控。
+ *   - ~~工作树脏度信号串扰~~（Step 2 已解决）：v0.4.0 的 readWorktreeDirty 共用
+ *     config.projectRoot 致批内 N 个 spawn 串扰。Step 2（concurrent-dispatch Step 2 /
+ *     per-WP git worktree 隔离）已落地——driver 为批内每 WP 建独立 git worktree，经
+ *     dispatchBatch 的 wpProjectRoots 透传给 executor.run 的 pendingAction.projectRoot，
+ *     脏度检测 per-WP 准确。非 git 仓库 / local executor / 无 --loop-id / 降级路径仍走
+ *     旧行为（批级串扰），另由 coordinator hardThreshold(0.95) + max_iterations 双兜底兜住。
+ *     --no-progress-detect flag 作为 escape hatch（强制批模式 noProgress 归零不累计）。
  *   - quota 额度放大：见上方「并发安全前提」（容忍 + softThreshold/hardThreshold 兜底）。
  *   - trace 观测冗余：批内 N 条 round record 共享同一轮 engine phaseTimings（每条自带
  *     dispatchedWp 可区分；按 iteration 聚合统计时注意同轮多条）。
@@ -92,10 +94,16 @@ function readyWaveFor(opts) {
  * 并发 dispatch 一个 readyWave：每个 wpId 克隆 pendingActionTemplate（仅换 wpId），
  * executor.run 并发，Promise.all 收集（每个 task 内部 catch 成 settled，单失败不阻断同批）。
  *
+ * concurrent-dispatch Step 2（per-WP worktree 隔离）：
+ *   opts.wpProjectRoots（{wpId: wtPath}）注入每 WP 的 per-call projectRoot override，
+ *   使 executor.run 在各自 worktree cwd 跑 → readWorktreeDirty per-WP 准确、互不串扰。
+ *   缺省/某 WP 无映射 → 不注入（executor 走 config.projectRoot = v0.4.0 串扰行为，回退安全）。
+ *
  * @param {object} opts
  * @param {object} opts.executor executor 实例（单实例，run 限流段同步原子故并发安全）
  * @param {object} opts.pendingActionTemplate actuator 产出的 pendingAction 模板（mode/strategy/...）
  * @param {string[]} opts.wpIds readyWave（≤ maxConcurrency）
+ * @param {object} [opts.wpProjectRoots] per-WP worktree 路径映射（{wpId: wtPath}）；Step 2 隔离用
  * @returns {Promise<Array<{wpId:string,status:'fulfilled'|'rejected',checkResult?:object,reason?:*}>>}
  */
 async function dispatchBatch(opts) {
@@ -103,6 +111,8 @@ async function dispatchBatch(opts) {
   var executor = opts.executor;
   var template = opts.pendingActionTemplate || {};
   var wpIds = Array.isArray(opts.wpIds) ? opts.wpIds : [];
+  var wpProjectRoots = (opts.wpProjectRoots && typeof opts.wpProjectRoots === 'object')
+    ? opts.wpProjectRoots : null;
   if (!executor || typeof executor.run !== 'function' || wpIds.length === 0) {
     return [];
   }
@@ -113,6 +123,10 @@ async function dispatchBatch(opts) {
       if (Object.prototype.hasOwnProperty.call(template, k)) pa[k] = template[k];
     }
     pa.wpId = wpId;
+    // Step 2：per-WP worktree projectRoot override（wpProjectRoots[wpId] 为 null/undefined 时不注入）
+    if (wpProjectRoots && wpProjectRoots[wpId]) {
+      pa.projectRoot = wpProjectRoots[wpId];
+    }
     return executor.run(pa).then(
       function (checkResult) {
         return { wpId: wpId, status: 'fulfilled', checkResult: checkResult };

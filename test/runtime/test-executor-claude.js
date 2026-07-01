@@ -446,6 +446,66 @@ test('WP 文档缺失 → prompt 含提示（不阻断）', async function () {
 });
 
 // ─────────────────────────────────────────────
+// Section 6b: per-call projectRoot override + noProgressForceZero（concurrent-dispatch Step 2）
+// ─────────────────────────────────────────────
+
+test('per-call projectRoot override：spawn cwd 与 readWorktreeDirty 都走 override', async function () {
+  // config.projectRoot = dirA（默认）；pendingAction.projectRoot = dirB（override）
+  var dirA = makeTmpDir();
+  var dirB = makeTmpDir();
+  try {
+    var fakeSpawn = makeFakeSpawn({ stdout: makeClaudeStdout({ wpId: 'WP-1', passed: true, summary: { total: 1, passed: 1, failed: 0 } }) });
+    // gitStatusFn 捕获被查询的 cwd，断言走的是 dirB 而非 dirA
+    var queriedCwds = [];
+    var gitStatusFn = function (_args, opts) {
+      queriedCwds.push(opts && opts.cwd);
+      return ''; // 干净
+    };
+    var exec = createExecutor({ spawnFn: fakeSpawn, projectRoot: dirA, gitStatusFn: gitStatusFn });
+    await exec.run(makePending('WP-1', 'dispatch', { projectRoot: dirB }));
+
+    // spawn cwd 应为 dirB（override）
+    assert.strictEqual(fakeSpawn.calls[0].opts.cwd, dirB, 'spawn cwd 走 override');
+    // readWorktreeDirty 的 cwd 也应为 dirB（dirtyBefore + dirtyAfter 两次）
+    assert.strictEqual(queriedCwds.length, 2, '执行前后各查一次脏度');
+    assert.strictEqual(queriedCwds[0], dirB, 'dirtyBefore 走 override cwd');
+    assert.strictEqual(queriedCwds[1], dirB, 'dirtyAfter 走 override cwd');
+  } finally {
+    cleanupTmpDir(dirA);
+    cleanupTmpDir(dirB);
+  }
+});
+
+test('不传 per-call projectRoot → 走 config.projectRoot（零回归）', async function () {
+  var dir = makeTmpDir();
+  try {
+    var fakeSpawn = makeFakeSpawn({ stdout: makeClaudeStdout({ wpId: 'WP-1', passed: true, summary: { total: 1, passed: 1, failed: 0 } }) });
+    var exec = createExecutor({ spawnFn: fakeSpawn, projectRoot: dir });
+    await exec.run(makePending('WP-1')); // 不带 projectRoot override
+
+    assert.strictEqual(fakeSpawn.calls[0].opts.cwd, dir, '走 config.projectRoot');
+  } finally {
+    cleanupTmpDir(dir);
+  }
+});
+
+test('noProgressForceZero=true → dirtyBefore/dirtyAfter 不采样，noProgress=false（escape hatch）', async function () {
+  // 即使工作树"干净"（gitStatusFn 返回 ''），forceZero 也应跳过 → 不判无进展
+  var fakeSpawn = makeFakeSpawn({
+    stdout: makeClaudeStdout({ wpId: 'WP-1', passed: false, summary: { total: 1, passed: 0, failed: 1 }, failedItems: [{ category: 't', id: 't1', reason: 'r' }] }),
+  });
+  var sampledCount = 0;
+  var gitStatusFn = function () { sampledCount += 1; return ''; };
+  var exec = createExecutor({ spawnFn: fakeSpawn, projectRoot: process.cwd(), gitStatusFn: gitStatusFn });
+  var result = await exec.run(makePending('WP-1', 'dispatch', { noProgressForceZero: true }));
+
+  assert.strictEqual(sampledCount, 0, 'forceZero 时不应采样脏度');
+  assert.strictEqual(result.noProgress, false, 'forceZero → 降级 noProgress=false');
+  assert.ok(!result.failedItems.some(function (fi) { return fi.category === 'progress'; }),
+    '不应追加 progress 失败项');
+});
+
+// ─────────────────────────────────────────────
 // Section 7: 内部工具
 // ─────────────────────────────────────────────
 

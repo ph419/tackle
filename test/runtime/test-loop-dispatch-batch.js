@@ -145,6 +145,54 @@ test.describe('dispatchBatch', function () {
     });
     assert.deepStrictEqual(r2, []);
   });
+
+  test('wpProjectRoots：每 WP 注入对应 projectRoot override（Step 2 隔离）', async function () {
+    var seen = [];
+    var exec = fakeExecutor(function (pa) {
+      seen.push({ wpId: pa.wpId, projectRoot: pa.projectRoot });
+      return Promise.resolve({ wpId: pa.wpId, passed: true, failedItems: [], summary: { total: 1, passed: 1, failed: 0 } });
+    });
+    await dispatchBatchLib.dispatchBatch({
+      executor: exec,
+      pendingActionTemplate: { mode: 'dispatch', strategy: 'full_restart' },
+      wpIds: ['WP-A', 'WP-B'],
+      wpProjectRoots: {
+        'WP-A': '/repo/.tackle/wt-loop1-WP-A',
+        'WP-B': '/repo/.tackle/wt-loop1-WP-B',
+      },
+    });
+    assert.strictEqual(seen.length, 2);
+    assert.strictEqual(seen[0].wpId, 'WP-A');
+    assert.strictEqual(seen[0].projectRoot, '/repo/.tackle/wt-loop1-WP-A', 'WP-A 应注入其 worktree 路径');
+    assert.strictEqual(seen[1].wpId, 'WP-B');
+    assert.strictEqual(seen[1].projectRoot, '/repo/.tackle/wt-loop1-WP-B', 'WP-B 应注入其 worktree 路径');
+  });
+
+  test('wpProjectRoots 缺省/某 WP 无映射 → 不注入 projectRoot（零回归）', async function () {
+    var seen = [];
+    var exec = fakeExecutor(function (pa) {
+      seen.push({ wpId: pa.wpId, projectRoot: pa.projectRoot });
+      return Promise.resolve({ wpId: pa.wpId, passed: true, failedItems: [], summary: { total: 1, passed: 1, failed: 0 } });
+    });
+    // WP-B 在 wpProjectRoots，WP-C 不在；不传 wpProjectRoots 时全不注入
+    await dispatchBatchLib.dispatchBatch({
+      executor: exec,
+      pendingActionTemplate: { mode: 'dispatch', strategy: 'full_restart' },
+      wpIds: ['WP-B', 'WP-C'],
+      wpProjectRoots: { 'WP-B': '/repo/wt-B' }, // WP-C 无映射
+    });
+    assert.strictEqual(seen[0].projectRoot, '/repo/wt-B', 'WP-B 有映射则注入');
+    assert.strictEqual(seen[1].projectRoot, undefined, 'WP-C 无映射则不注入');
+
+    // 完全不传 wpProjectRoots
+    seen = [];
+    await dispatchBatchLib.dispatchBatch({
+      executor: exec,
+      pendingActionTemplate: { mode: 'dispatch', strategy: 'full_restart' },
+      wpIds: ['WP-X'],
+    });
+    assert.strictEqual(seen[0].projectRoot, undefined, '不传 wpProjectRoots → 不注入');
+  });
 });
 
 // ─────────────────────────────────────────────

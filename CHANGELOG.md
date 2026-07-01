@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-07-01
+
+### Added
+
+- **loop driver per-WP git worktree 隔离（concurrent-dispatch Step 2）**：彻底解决 v0.4.0 的 N>1 已知限制——`readWorktreeDirty` 共用单一 `config.projectRoot` 致批内 N 个 spawn 并发改同一工作树、`noProgress` 脏度信号串扰（退化为批级而非 per-WP，发散判定精度下降）。详见 `docs/reports/2026-07-01_step2-follow-up-worktree-isolation.md`。
+  - 新模块 `plugins/runtime/loop-worktree.js`（+ `test/runtime/test-loop-worktree.js`，21 用例，真实临时 git repo 端到端）：`createWorktreeForWp`（每 WP 独立分支 `tackle/{loopId}/{wpId}` + `git worktree add`）+ `mergeWorktreeBranch`（策略 A：批后 cherry-pick 回主分支，冲突 abort 不阻断）+ `removeWorktree`（清理 worktree + 分支，best-effort）
+  - executor per-call projectRoot override（`executor-claude.js` / `executor-default.js`）：`run(pendingAction)` 开头解析 `runCwd = pendingAction.projectRoot || config.projectRoot`，4 处 `config.projectRoot`（dirtyBefore / buildPrompt / spawn cwd / dirtyAfter）改走 `runCwd`。单 executor 实例不变（保 quota/限流原子安全）+ per-call 脏度隔离。不传 override → 零回归 = v0.4.0
+  - `dispatchBatch` 新增 `wpProjectRoots`（{wpId: wtPath}）透传：克隆 pendingAction 时注入每 WP 的 `projectRoot` override；缺省/某 WP 无映射 → 不注入（回退安全）
+  - driver `bin/commands/loop.js`：批前为每 WP 建 worktree（`wtMap`/`wtBranches`）→ dispatchBatch 透传 → 串行回填内每 WP（仅 `fulfilled && passed`）commit+cherry-pick，无论状态 remove。仅 `maxConcurrency>1 && default executor && isolated` 启用，N=1 / local / 无 --loop-id / 非 git 仓库 → 跳过（零回归 = v0.3.15）
+  - **`--no-progress-detect` flag**（文档 §5.5 escape hatch）：N>1 opt-in 时给 pendingAction 注入 `noProgressForceZero`，executor 据此把 dirtyBefore/dirtyAfter 置 null（applyProgressDetection 走降级 noProgress=false，不累计发散）。牺牲 per-WP 进展归因精度换稳定性，worktree 降级时的兜底
+  - **合并策略 A**（用户选定）：每 WP 独立分支 → 批后逐个 cherry-pick（仅 passed）。冲突 → abort + 回写 `cr.passed=false` + failedItem（engine 经聚合 lastChecklist 感知失败、触发 retry/resplit，不崩 loop）。worktree 落盘 `.tackle/wt-{loopId}-{wpId}`（已 gitignored）
+  - 容错纪律（承袭 WP-191/196）：任何 git 调用失败 → 降级（不注入 override / 跳过 worktree），绝不阻断 loop 主流程
+  - 测试：`test-loop-worktree.js` +21（create/merge/remove/降级/幂等/端到端/多 WP 并发）+ `test-executor-claude.js` +3（per-call override / 零回归 / noProgressForceZero）+ `test-executor-default.js` +3（同）+ `test-loop-dispatch-batch.js` +2（wpProjectRoots 透传 / 缺省不注入）+ `test-loop-driver.js` +3（driver 层 worktree 接线：wiring / rejected 跳过 / 冲突回写）；全量 1785/1785 零回归，build SUCCEEDED，validate 26 plugins 0错0警
+  - 不变量守住：N=1 行为零变化（不建 worktree、不注入 override）= v0.3.15 串行；engine/index.js / loop-actuator.js / plan-reader.js 零改动
+
+### Fixed
+
+- **worktree 合并门控（评审修复 #1，major）**：原实现批后串行回填对**所有** WP（含 rejected）都 `git add -A + commit + cherry-pick`，把 executor.run 崩溃/超时（status='rejected'）的半成品代码并入主分支污染历史。改为**仅 `fulfilled && passed` 才 commit+cherry-pick**：rejected（半成品）与未通过验收（passed=false）的改动都不并入 main，随 worktree remove 丢弃，下轮从干净 main 重试。这与 `appendProgressLine`（仅 passed 标完成）对齐——main 只含已校验改动。removeWorktree 无论状态都执行（finally，防 worktree/分支残留）
+- **cherry-pick 冲突回写 cr（评审修复 #2，major）**：原实现冲突时只打日志、不改 `cr`，若冲突 WP 的 `cr.passed` 原为 true（两并发 WP 改同文件），则 `appendProgressLine` 仍标它完成、但其改动因冲突未并入主分支 = 隐性数据丢失 + engine 误判达成。改为冲突时回写 `cr.passed=false` + 追加 `failedItem{category:'worktree', id:'merge_conflict'}`（cr 是 `r.checkResult` 同一引用，下方 completedSet 判定与 `aggregateCheckResults` 都读回写值），engine 据聚合 lastChecklist 感知失败并 retry/resplit
+- **driver 层 worktree 接线测试覆盖（评审修复 #3，major → test）**：原 `test-loop-driver.js` 的 `--concurrency` 测试用 `--executor=local`（enableWorktree 门控 `args.executor!=='local'` 不满足），driver 层 worktree wiring（loop.js create→透传→commit+merge→remove）**零覆盖**。补 3 用例（真实临时 git repo + spy 拦截 createExecutor 返 fake executor 避免真 spawn claude）：① N>1+default+isolated 启用隔离+merged+主分支含改动+无残留；② rejected WP 跳过 commit+cherry-pick（不污染主分支）但 worktree 仍清理；③ 冲突回写 cr.passed=false 不标完成。锁定接线防回归
+- **测试噪声（test-loop-worktree.js）**：`makeTempRepo()` 未建 `.gitignore`，致冲突测试在主 repo `git add -A` 时把 `.tackle/wt-*` 当 embedded git repository（gitlink 污染主 repo index + 警告噪声）。补 `.tackle/` / `.custom-wt/` 忽略，与真实仓库（仓根 `.gitignore` 已覆盖 `.tackle/`）一致，测试输出干净稳定
+  - 不变量守住：N=1 行为零变化（不建 worktree、不注入 override）= v0.3.15 串行；engine/index.js / loop-actuator.js / plan-reader.js 零改动
+
 ## [0.4.0] - 2026-07-01
 
 ### Added
@@ -663,6 +686,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 插件注册表 (`plugin-registry.json`)
 - 运行时层：harness-build、plugin-loader、event-bus、state-store、config-manager、logger
 
+[0.4.1]: https://github.com/ph419/tackle-harness/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/ph419/tackle-harness/compare/v0.3.17...v0.4.0
 [0.3.17]: https://github.com/ph419/tackle-harness/compare/v0.3.16...v0.3.17
 [0.3.16]: https://github.com/ph419/tackle-harness/compare/v0.3.15...v0.3.16

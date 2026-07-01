@@ -24,6 +24,9 @@ var path = require('path');
 var os = require('os');
 
 var loopCmd = require('../../bin/commands/loop');
+// concurrent-dispatch Step 2 driver 层 worktree 测试需要真实 git repo + 直接 patch loop-worktree
+var { execFileSync } = require('child_process');
+var worktreeMod = require('../../plugins/runtime/loop-worktree');
 
 // ─────────────────────────────────────────────
 // Helpers
@@ -1383,6 +1386,200 @@ test('execute：无 config 无 settings 无模型 env → driver 降级 unknown 
     loopCmd._loopExecutor.createExecutor = realCreate;
     if (savedModel !== undefined) process.env.ANTHROPIC_MODEL = savedModel;
     if (savedSonnet !== undefined) process.env.ANTHROPIC_DEFAULT_SONNET_MODEL = savedSonnet;
+    process.chdir(origCwd);
+    cleanupTmpDir(projectRoot);
+  }
+});
+
+// ─────────────────────────────────────────────
+// concurrent-dispatch Step 2：driver 层 per-WP worktree 隔离接线测试
+//   test-loop-worktree.js 测 loop-worktree 模块单元；此处测 driver wiring（loop.js:908-1004）：
+//   createWorktreeForWp → dispatchBatch wpProjectRoots 透传 → commit+cherry-pick+remove。
+//   需真实 git repo（否则 createWorktreeForWp 降级，wtMap 空，测不到接线）。
+//   用 spy 拦截 createExecutor 返 fake executor（避免真 spawn claude），fake 写真实文件让
+//   worktree 有非空改动（空 commit 的 cherry-pick 会 degraded，测不到 merged 路径）。
+// ─────────────────────────────────────────────
+
+function realExec(cmd, args, opts) {
+  return execFileSync(cmd, args, Object.assign({ encoding: 'utf8' }, opts));
+}
+
+/** 建一个真实临时 git repo（含初始 commit + .gitignore），返回 repo 根路径。 */
+function makeGitRepo() {
+  var dir = fs.mkdtempSync(path.join(os.tmpdir(), 'loop-driver-git-'));
+  realExec('git', ['init', '-q'], { cwd: dir });
+  realExec('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+  realExec('git', ['config', 'user.name', 'Test'], { cwd: dir });
+  realExec('git', ['config', 'core.autocrlf', 'false'], { cwd: dir });
+  fs.writeFileSync(path.join(dir, '.gitignore'), '.tackle/\n.tackle-state/\n');
+  fs.writeFileSync(path.join(dir, 'README.md'), '# init\n');
+  realExec('git', ['add', '-A'], { cwd: dir });
+  realExec('git', ['commit', '-q', '-m', 'init'], { cwd: dir });
+  return dir;
+}
+
+/**
+ * 造一个 fake executor（避免真 spawn claude）：默认写一个文件到 pa.projectRoot（worktree cwd）
+ * 让 worktree 有非空改动（commit 非空 → cherry-pick 成功 → merged），返回 passed=true。
+ * opts.rejectWp：该 wpId 的 run() reject（测 rejected 跳过合并路径）。
+ */
+function makeFakeExecutor(opts) {
+  opts = opts || {};
+  var rejectWp = opts.rejectWp;
+  return {
+    name: 'default',
+    config: { model: 'fake-model' },
+    quota: {
+      windowUsed: function () { return 0; },
+      weekUsed: function () { return 0; },
+      windowRatio: function () { return 0; },
+    },
+    run: function (pa) {
+      pa = pa || {};
+      if (rejectWp && pa.wpId === rejectWp) {
+        return Promise.reject(new Error('simulated executor crash'));
+      }
+      // 写真实文件到 worktree cwd（pa.projectRoot = wtPath 经 wpProjectRoots 透传）
+      if (pa.projectRoot) {
+        try {
+          fs.writeFileSync(path.join(pa.projectRoot, 'fake-' + pa.wpId + '.js'), '// ' + pa.wpId + '\n');
+        } catch (_e) { /* best-effort */ }
+      }
+      return Promise.resolve({
+        wpId: pa.wpId, passed: true,
+        summary: { total: 1, passed: 1, failed: 0 },
+        failedItems: [],
+      });
+    },
+  };
+}
+
+/** 列出 wsRoot/.tackle 下残留的 wt-* 目录（验收 removeWorktree 跑彻底）。 */
+function listLeftoverWorktrees(wsRoot) {
+  var wtRoot = path.join(wsRoot, '.tackle');
+  if (!fs.existsSync(wtRoot)) return [];
+  return fs.readdirSync(wtRoot).filter(function (n) { return n.indexOf('wt-') === 0; });
+}
+
+// Test A：N>1 + default + isolated → 启用 worktree 隔离 + passed WP merged + 主分支含改动 + 无残留
+//   锁定 enableWorktree 三条件激活 + create→透传→merge→remove 全链路（happy path）。
+test('execute：N>1 + default + isolated → per-WP worktree 隔离 + merged + 主分支含改动', async function () {
+  var projectRoot = makeGitRepo();
+  fs.mkdirSync(path.join(projectRoot, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(projectRoot, 'task.md'), '# Task\n', 'utf8');
+  fs.writeFileSync(path.join(projectRoot, '.claude', 'plan.md'), makePlan(2), 'utf8');
+  var planPath = path.join(projectRoot, '.claude', 'plan.md');
+  var origCwd = process.cwd();
+
+  var realCreate = loopCmd._loopExecutor.createExecutor;
+  loopCmd._loopExecutor.createExecutor = function (_provider, _opts) {
+    return makeFakeExecutor({});
+  };
+
+  try {
+    process.chdir(projectRoot);
+    var h = makeCtx(projectRoot, [planPath, '--executor=default', '--concurrency=2', '--loop-id=wt-wire']);
+    await loopCmd.execute(h.ctx);
+    var combined = h.logs.join('\n');
+    assert.strictEqual(h.exitCode.value, 0, '应收敛 achieved');
+    assert.ok(combined.indexOf('per-WP worktree 隔离') !== -1, '应激活 worktree 隔离（wtMap 非空）');
+    assert.ok(combined.indexOf('worktree merged') !== -1, 'passed WP 应 cherry-pick merged');
+    // 主分支含两 WP 改动（cherry-pick 真实并入，证明 merge 不只是空 commit）
+    assert.ok(fs.existsSync(path.join(projectRoot, 'fake-WP-1.js')), '主分支含 WP-1 worktree 改动');
+    assert.ok(fs.existsSync(path.join(projectRoot, 'fake-WP-2.js')), '主分支含 WP-2 worktree 改动');
+    // 清理彻底：无 wt-* 残留（removeWorktree 跑过）
+    var leftovers = listLeftoverWorktrees(path.join(projectRoot, '.tackle-state', 'wt-wire'));
+    assert.strictEqual(leftovers.length, 0, '不应残留 wt-* worktree 目录');
+  } finally {
+    loopCmd._loopExecutor.createExecutor = realCreate;
+    process.chdir(origCwd);
+    cleanupTmpDir(projectRoot);
+  }
+});
+
+// Test B：rejected WP 不 commit + 不 cherry-pick（半成品不污染主分支），但仍清理 worktree
+//   锁定 concurrent-dispatch Step 2 评审修复 #1（合并门控：仅 fulfilled && passed 才 merge）。
+test('execute：rejected WP 跳过 commit+cherry-pick（不污染主分支），worktree 仍清理', async function () {
+  var projectRoot = makeGitRepo();
+  fs.mkdirSync(path.join(projectRoot, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(projectRoot, 'task.md'), '# Task\n', 'utf8');
+  fs.writeFileSync(path.join(projectRoot, '.claude', 'plan.md'), makePlan(2), 'utf8');
+  var planPath = path.join(projectRoot, '.claude', 'plan.md');
+  var origCwd = process.cwd();
+
+  var realCreate = loopCmd._loopExecutor.createExecutor;
+  loopCmd._loopExecutor.createExecutor = function (_provider, _opts) {
+    return makeFakeExecutor({ rejectWp: 'WP-2' }); // WP-2 永远 reject（模拟崩溃）
+  };
+
+  try {
+    process.chdir(projectRoot);
+    var h = makeCtx(projectRoot, [planPath, '--executor=default', '--concurrency=2',
+      '--loop-id=wt-rej', '--max-iters=3']);
+    await loopCmd.execute(h.ctx);
+    var combined = h.logs.join('\n');
+    // WP-2 rejected → 跳过合并（不并入主分支）
+    assert.ok(combined.indexOf('WP-2 worktree 跳过合并（执行 rejected') !== -1,
+      'rejected WP 应跳过 commit+merge 并记录原因');
+    assert.ok(combined.indexOf('WP-2 worktree merged') === -1,
+      'rejected WP 不应被 merged');
+    // WP-1 passed → 正常 merged
+    assert.ok(combined.indexOf('WP-1 worktree merged') !== -1, 'passed WP 仍正常 merged');
+    assert.ok(fs.existsSync(path.join(projectRoot, 'fake-WP-1.js')), '主分支含 WP-1 改动');
+    assert.ok(!fs.existsSync(path.join(projectRoot, 'fake-WP-2.js')),
+      'rejected WP 的改动不应并入主分支（fake-WP-2.js 不存在）');
+    // worktree 仍被清理（reject 不泄漏）
+    var leftovers = listLeftoverWorktrees(path.join(projectRoot, '.tackle-state', 'wt-rej'));
+    assert.strictEqual(leftovers.length, 0, 'rejected WP 的 worktree 也应清理（无残留）');
+  } finally {
+    loopCmd._loopExecutor.createExecutor = realCreate;
+    process.chdir(origCwd);
+    cleanupTmpDir(projectRoot);
+  }
+});
+
+// Test C：cherry-pick 冲突 → 回写 cr.passed=false + failedItem（engine 感知失败，不误标完成）
+//   锁定 concurrent-dispatch Step 2 评审修复 #3（冲突反馈回 cr，防隐性数据丢失）。
+//   patch mergeWorktreeBranch 强制返 conflict（createWorktreeForWp 仍真建，让 wtMap 非空进 merge 块）。
+test('execute：worktree merge 冲突 → 回写 cr.passed=false，不标完成交 retry', async function () {
+  var projectRoot = makeGitRepo();
+  fs.mkdirSync(path.join(projectRoot, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(projectRoot, 'task.md'), '# Task\n', 'utf8');
+  fs.writeFileSync(path.join(projectRoot, '.claude', 'plan.md'), makePlan(2), 'utf8');
+  var planPath = path.join(projectRoot, '.claude', 'plan.md');
+  var origCwd = process.cwd();
+
+  var realCreate = loopCmd._loopExecutor.createExecutor;
+  loopCmd._loopExecutor.createExecutor = function (_provider, _opts) {
+    return makeFakeExecutor({});
+  };
+  var realMerge = worktreeMod.mergeWorktreeBranch;
+  worktreeMod.mergeWorktreeBranch = function () {
+    return { merged: false, conflict: true, degraded: false }; // 强制冲突
+  };
+
+  try {
+    process.chdir(projectRoot);
+    var h = makeCtx(projectRoot, [planPath, '--executor=default', '--concurrency=2',
+      '--loop-id=wt-conf', '--max-iters=2']);
+    await loopCmd.execute(h.ctx);
+    var combined = h.logs.join('\n');
+    assert.ok(combined.indexOf('worktree merge 冲突') !== -1, '应记录冲突');
+    assert.ok(combined.indexOf('已回写失败') !== -1, '应回写 cr 失败交 retry/resplit');
+    assert.ok(combined.indexOf('worktree merged') === -1, '冲突不应 merged');
+    // 冲突回写后 cr.passed=false → 两 WP 都不应被标完成（PROGRESS.md 无完成行）
+    assert.ok(combined.indexOf('✓ WP-1 passed') === -1 && combined.indexOf('✓ WP-2 passed') === -1,
+      '冲突的 WP 不应被标 passed/完成');
+    // 主分支不应含冲突 WP 的改动（冲突 abort，未并入）
+    assert.ok(!fs.existsSync(path.join(projectRoot, 'fake-WP-1.js')) &&
+      !fs.existsSync(path.join(projectRoot, 'fake-WP-2.js')),
+      '冲突 WP 改动未并入主分支');
+    // worktree 仍清理
+    var leftovers = listLeftoverWorktrees(path.join(projectRoot, '.tackle-state', 'wt-conf'));
+    assert.strictEqual(leftovers.length, 0, '冲突 WP 的 worktree 也应清理');
+  } finally {
+    loopCmd._loopExecutor.createExecutor = realCreate;
+    worktreeMod.mergeWorktreeBranch = realMerge;
     process.chdir(origCwd);
     cleanupTmpDir(projectRoot);
   }

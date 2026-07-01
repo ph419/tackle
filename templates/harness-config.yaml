@@ -239,7 +239,17 @@ loop:
   #   默认 1（串行 = v0.3.15 回退安全）；--concurrency flag 优先于此值。
   #   N>1 时批内 quota 额度检查-消耗间隙放大，由 executor softThreshold(0.9) 下批降速 +
   #   coordinator hardThreshold(0.95) 熔断兜底；GLM 5h 窗口接近上限时建议降回 1。
+  #
+  # concurrent-dispatch Step 2（per-WP git worktree 隔离，v0.4.1）：N>1 + 隔离模式 + default
+  #   executor 时，批内每 WP 建独立 git worktree（.tackle/wt-{loopId}-{wpId}），executor 在
+  #   各自 cwd 跑，readWorktreeDirty per-WP 准确、互不串扰（修复 v0.4.0 noProgress 批级串扰）。
+  #   批后逐个 cherry-pick 回主分支（策略 A），冲突不阻断（engine retry/resplit 兜底）。
+  #   N=1 / local executor / 无 --loop-id / 非 git 仓库 → 跳过 worktree（零回归）。
   concurrency: 1
+  # no_progress_detect（concurrent-dispatch Step 2 escape hatch，文档 §5.5）：N>1 时强制
+  #   noProgress 归零不累计发散（牺牲 per-WP 进展归因精度换稳定性）。worktree 降级时的兜底。
+  #   --no-progress-detect flag 优先于此值；默认 false（启用 worktree 隔离时无需开）。
+  no_progress_detect: false
   providers:
     # 智谱 GLM（享 Coding Plan 套餐额度，走 claude CLI 中转合规）
     - key: glm
